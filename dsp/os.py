@@ -23,6 +23,7 @@ import autotune  # noqa: E402  (assembles it: we only need its entry points)
 TUNE_INIT, FX_TUNE = autotune.a.labels['tune_init'], autotune.a.labels['fx_tune']
 
 BASE = 0xA00
+METER = 'meter' in sys.argv[1:]        # py os.py meter: histogram of idle spins per frame at X:$1100-$11FF
 # heavy
 K_HP, K_LP, H_TRIM = 0x07AE14, 0x399999, 0x080000
 # reverse
@@ -67,11 +68,31 @@ w(0x56F400, 0x000002, 0x542200)         # FX2 = reverse
 w(0x56F400, 0x7FFFFF, 0x563D00)         # output stage until the ESP sends the pots: wet gain 1.0
 w(0x563E00, 0x563C00)                   # tone off (k = 1.0) ; volume 1.0
 w(0x200013, 0x562F00, 0x563F00)         # clr a ; dry gain 0 ; tone filter state 0
+if METER:
+    w(0x67F400, 0x1100, 0x200013, 0x57F400, 256)   # r7 = $1100 ; clr a ; b = 256
+    L('m_clr')
+    w(0x565F00, 0x01418C); jcc(0x0E2000, 'm_clr')  # clear the histogram
+    w(0x67F400, 0x1100, 0x77F400, 256)  # r7 = $1100 (+ spins) ; n7 = warm-up frames (the first ones are partial)
 # ---------------- sample loop
 L('loop')
-ext(0x01B388, 'loop')                   # jclr #8,x:SAISR,loop
+if METER:                               # idle spin = 9.1 cycles (cycprobe.py): headroom = 9.1 * min spins
+    ext(0x01B3A8, 'got')                # jset #8,x:SAISR,got
+    w(0x205F00)                         # move (r7)+
+    jcc(0x0C0000, 'loop')
+    L('got')
+else:
+    ext(0x01B388, 'loop')               # jclr #8,x:SAISR,loop
 w(0x0445C9)                             # movep x:RX1,x1
 ext(0x01B3A6, 'left')                   # jset #6,x:SAISR,left
+if METER:
+    w(0x23EF00, 0x20000B)               # b = n7 ; tst b
+    jcc(0x0EA000, 'm_on')               # jeq: warm-up done
+    w(0x01418C, 0x21FF00)               # n7 = b - 1
+    jcc(0x0C0000, 'm_keep')
+    L('m_on')
+    w(0x57E700, 0x014188, 0x576700)     # x:(r7) += 1  (r7 = $1100 + spins this frame)
+    L('m_keep')
+    w(0x67F400, 0x1100)                 # r7 = $1100
 w(0x56B000, 0x200060, 0x21C500, 0x453A00)  # x1 = sat(L+R) ; x:$3A = dry
 w(0x56A000, 0x200003)                   # a = mode ; tst a
 jcc(0x0EA000, 'single')                 # jeq single
@@ -174,7 +195,8 @@ w(0x00000C)                                        # rts
 for i, n, op in fix:
     p[i] = (op | labels[n]) if op else labels[n]
 end = BASE + len(p) - 1
-assert end <= 0xBFF, 'program runs past internal P RAM: %X' % end
+# P RAM is $0000-$13FF: TC's boot sets OMR MS (measured: OMR = $000B81). $0C00-$13FF is kept for the amp sim.
+assert end <= 0xBFF, 'kernel runs into P:$0C00 (kept for the amp sim): %X' % end
 print(listing(p, base=BASE))
 print('words=%d  end=P:%04X  labels=%s' % (len(p), end, {k: '%04X' % v for k, v in labels.items() if k.startswith(('fx', 'table'))}))
-open(os.path.join(HERE, 'os.hex'), 'w').write('%X\n%s\n' % (BASE, ' '.join('%06X' % x for x in p)))
+open(os.path.join(HERE, 'os_meter.hex' if METER else 'os.hex'), 'w').write('%X\n%s\n' % (BASE, ' '.join('%06X' % x for x in p)))

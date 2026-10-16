@@ -396,6 +396,10 @@ class Sim:
         if n == 'Rep_xxx':
             self.rep = (f('h') << 8) | f('i')
             return nxt
+        if n == 'Rep_S':
+            self.rep = self.get(REG6[f('d')], limit=False)
+            if self.rep == 0: raise SimError('REP with LC=0 (repeats 65536 times on hardware)')
+            return nxt
         if n in ('Andi', 'Ori'):
             return nxt   # MR/CCR mask bits: interrupts are not modelled
         if n == 'Enddo': self.loops.pop(); return nxt
