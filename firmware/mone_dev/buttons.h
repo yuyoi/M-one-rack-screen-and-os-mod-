@@ -36,27 +36,28 @@ void btnSave() {
 bool btnMapped() { return btnMap.done == 1; }
 
 // Panel sketch: 6 + 6 boxes and the right pair; done = green, current = yellow
-static void learnDraw() {
-  tft.fillScreen(C_BG);
-  tft.fillRect(0, 0, 240, 44, C_YEL);
-  tft.setTextColor(0x000000);
-  tft.setFont(&fonts::FreeSansBold12pt7b);
-  tft.setTextDatum(middle_center);
-  tft.drawString("LEARN BUTTONS", 120, 23);
+// The 14 button tiles (learn screen + button test page): T1-T6 / B1-B6 rows, R1/R2 at the right
+void drawTiles(int y0, int lit, uint16_t done, uint32_t litCol) {
   for (int i = 0; i < K_N; i++) {
-    int x = i < 12 ? 6 + (i % 6) * 32 : 206, y = i < 6 ? 60 : (i < 12 ? 92 : (i == K_R1 ? 60 : 92));
-    uint32_t c = i < learnIdx ? C_GRN : (i == learnIdx ? C_YEL : 0x303030);
-    tft.fillRoundRect(x, y, 28, 26, 4, c);
-    tft.setFont(&fonts::Font2);
-    tft.setTextColor(i == learnIdx ? 0x000000 : 0xFFFFFF);
-    tft.drawString(BTN_NAMES[i], x + 14, y + 13);
+    int x = i < 12 ? 2 + (i % 6) * 17 : 104, y = i < 6 ? y0 : (i < 12 ? y0 + 14 : (i == K_R1 ? y0 : y0 + 14));
+    bool on = (done >> i) & 1;
+    uint32_t c = i == lit ? litCol : (on ? 0x30D060 : th::STEEL_D);
+    th::bevel(x, y, x + 15, y + 11, th::p15(c), th::p15(i == lit || on ? th::WHITE : th::STEEL), th::BLACK);
+    th::text(x + 8, y + 3, BTN_NAMES[i], i == lit || on ? th::BLACK : th::p15(th::STEEL_L), 1, 'm');
   }
-  char b[24];
-  snprintf(b, sizeof b, "press %s", BTN_NAMES[learnIdx]);
-  tft.setFont(&fonts::FreeSansBold18pt7b);
-  tft.setTextColor(0xFFFFFF);
-  tft.drawString(b, 120, 160);
-  displayStatus("press each once   knob = skip", C_GREY);
+}
+
+static void learnDraw() {
+  if (!th::ready) return;
+  th::cv.fillScreen(th::BLACK);
+  th::header("LEARN", millis());
+  drawTiles(26, learnIdx, learnIdx > 0 ? (1 << learnIdx) - 1 : 0, th::YELLOW);
+  char b[16];
+  snprintf(b, sizeof b, "PRESS %s", BTN_NAMES[learnIdx]);
+  th::metal(60, 64, b, 2, th::WHITE, th::YELLOW, 'm');
+  th::text(60, 86, "ONE AT A TIME", th::p15(th::STEEL_L), 1, 'm');
+  th::status("PRESS ONCE KNOB:SKIP");
+  th::present();
 }
 
 void btnLearnStart() {

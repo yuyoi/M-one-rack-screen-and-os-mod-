@@ -1,4 +1,6 @@
 // M-One OS UI: pages on the front controls; FX settings go live to the DSP kernel (dsp/os.py) over J8.
+// Drawn with theme.h (PS1 heavy-metal look): every page renders itself into the 120x120 canvas from the current state,
+// and uiAnimTick redraws it ~9x a second (faster while the rows fly in) so the lava, flames and selection shimmer move.
 // Buttons by position (buttons.h):
 //   T1 = FX page   T2 = TUNE page   T3 = SYSTEM page (live inputs, WiFi)
 //   T6 / B6 = cursor up / down    encoder = change the selected value    R1 / B4 / B5 = enter (value +1)    R2 = back to FX
@@ -16,6 +18,9 @@ int uiPage = PAGE_FX;
 
 static const char *MODE_NAMES[] = {"SINGLE", "DOUBLE", "DBL-SINGLE"};
 static const char *FX_NAMES[] = {"CLEAN", "HEAVY", "REVERSE", "COMP", "TUNE", "VOX"};
+static const char *FX_SHORT[] = {"CLN", "HVY", "REV", "CMP", "TUNE", "VOX"};          // routing line in DOUBLE modes
+static const bool FX_PEDAL[] = {false, true, true, true, false, false};                 // PEDAL: idle screen = mock pedal
+static const uint32_t FX_COL[] = {0xFF7000, 0xFF7000, 0x963CDC, 0x2E8BFF, 0xFFCC00, 0xE6AA28};   // pedal colours
 static const char *KEY_NAMES[] = {"C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"};
 static const char *SCALE_NAMES[] = {"CHROMATIC", "MAJOR", "MINOR"};
 static const int N_MODES = 3, N_FX = 6;
@@ -37,182 +42,215 @@ static int wrapv(int v, int n) { return ((v % n) + n) % n; }
 
 bool rowsVisible() { return liveOn && !faceOn && uiPage == PAGE_SYS && learnIdx < 0; }
 
-static void menuItem(int row, const char *key, const char *val, bool sel, bool dim) {
-  int y = 54 + row * 34;
-  tft.fillRect(0, y, 240, 32, sel ? 0x202020 : C_BG);
-  if (sel) tft.fillRect(0, y, 4, 32, C_YEL);
-  tft.setFont(&fonts::FreeSans9pt7b);
-  tft.setTextDatum(middle_left);
-  tft.setTextColor(dim ? 0x404040 : C_GREY);
-  tft.drawString(key, 12, y + 16);
-  tft.setFont(&fonts::FreeSansBold9pt7b);
-  tft.setTextDatum(middle_right);
-  tft.setTextColor(dim ? 0x404040 : (sel ? C_YEL : 0xFFFFFF));
-  tft.drawString(val, 228, y + 16);
+// ---- render state: status line, dirty flag, page-open time (fly-in), live input values for SYSTEM
+bool uiDirty = true;
+static uint32_t pageT0 = 0;
+static int lastPage = -1;
+static char uiStat[32] = "";
+static uint32_t uiStatCol = th::YELLOW, uiStatT = 0;
+int sysMv[5] = {0, 0, 0, 0, 0};             // pots 1-3, ladders 1-2 (mV), set by controlsTick
+uint32_t uiLastPushMs = 0;                  // how long the last frame took (serial 'V')
+
+// Status messages show for 2.5 s, then the page's own hint comes back
+void displayStatus(const char *line, uint32_t col) {
+  snprintf(uiStat, sizeof uiStat, "%s", line);
+  uiStatCol = col;
+  uiStatT = millis();
+  if ((!liveOn || learnIdx >= 0) && th::ready) { th::status(uiStat, col); th::present(); }   // serial / OTA / learn screen
+  else uiDirty = true;
 }
 
-static void pageHeader(const char *title) {
-  tft.fillScreen(C_BG);
-  tft.fillRect(0, 0, 240, 44, C_YEL);
-  tft.setTextColor(0x000000);
-  tft.setFont(&fonts::FreeSansBold12pt7b);
-  tft.setTextDatum(middle_center);
-  tft.drawString(title, 120, 23);
-  for (int i = 0; i < 3; i++) tft.fillCircle(212 + i * 9, 23, 3, i == uiPage ? 0x000000 : 0x806600);  // page dots
+void displayRow(int row, const char *key, const char *val, uint32_t col) { uiDirty = true; }   // SYSTEM draws live values
+
+static void statusOr(const char *hint) {
+  bool fresh = uiStat[0] && millis() - uiStatT < 2500;
+  th::status(fresh ? uiStat : hint, fresh ? uiStatCol : th::YELLOW);
 }
 
-static void fxRouting() {          // signal-flow line under the items
-  char a[16], b2[16], s[48];
-  snprintf(a, sizeof a, "%s", menu.byp1 ? "-" : FX_NAMES[menu.fx1]);
-  snprintf(b2, sizeof b2, "%s", menu.byp2 ? "-" : FX_NAMES[menu.fx2]);
-  if (menu.mode == 0) snprintf(s, sizeof s, "IN > %s > OUT", a);
-  else if (menu.mode == 1) snprintf(s, sizeof s, "IN > %s + %s > OUT", a, b2);
-  else snprintf(s, sizeof s, "IN > %s > %s > OUT", a, b2);
-  tft.setFont(&fonts::Font2);
-  tft.setTextDatum(middle_center);
-  tft.setTextColor(C_BLUE);
-  tft.drawString(s, 120, 170);
+// Dark ember backdrop between the header and the status bar
+static void backdrop() {
+  th::cv.fillScreen(th::BLACK);
+  for (int y = 23; y < 108; y++) th::cv.drawFastHLine(0, y, 120, th::p15(th::mix(th::BLACK, th::ASH, (y - 23) / 85.0f)));
 }
 
 // ---- Button test page: green = has worked, yellow = latest press, grey = not seen yet. Shows where the latest
 // press came from (GPIO or ladder mV, "??" in red if it matches no learned button), the 3 pots and the encoder count.
 static uint16_t testSeen = 0;              // bit per button
 static int testLast = -1, testPrevKey = -1, testEnc = 0;
-static int testPotShown[3] = {-9999, -9999, -9999};
-static char testBig[8] = "", testSmall[32] = "";
-static uint32_t testCol = C_GREY;
+static char testBig[8] = "", testSmall[24] = "";
+static uint32_t testCol = th::STEEL_L;
 
-static void testTile(int i) {
-  int x = i < 12 ? 6 + (i % 6) * 32 : 206, y = i < 6 ? 52 : (i < 12 ? 82 : (i == K_R1 ? 52 : 82));
-  tft.fillRoundRect(x, y, 28, 26, 4, i == testLast ? C_YEL : ((testSeen >> i) & 1 ? C_GRN : 0x303030));
-  tft.setFont(&fonts::Font2);
-  tft.setTextDatum(middle_center);
-  tft.setTextColor(i == testLast ? 0x000000 : 0xFFFFFF);
-  tft.drawString(BTN_NAMES[i], x + 14, y + 13);
-}
-
-static void testInfo(const char *big, const char *small, uint32_t col) {
-  snprintf(testBig, sizeof testBig, "%s", big);
-  snprintf(testSmall, sizeof testSmall, "%s", small);
-  testCol = col;
-  tft.fillRect(0, 112, 240, 56, C_BG);
-  tft.setTextDatum(middle_center);
-  tft.setFont(&fonts::FreeSansBold18pt7b);
-  tft.setTextColor(col);
-  tft.drawString(testBig, 120, 132);
-  tft.setFont(&fonts::Font2);
-  tft.setTextColor(C_GREY);
-  tft.drawString(testSmall, 120, 159);
+static void drawTest(uint32_t now) {
+  backdrop();
+  th::header("BUTTON TEST", now);
+  drawTiles(26, testLast, testSeen, th::YELLOW);
+  th::metal(60, 56, testBig, 3, th::WHITE, testCol == th::RED ? th::RED : th::YELLOW, 'm');
+  th::text(60, 82, testSmall, th::p15(th::STEEL_L), 1, 'm');
+  for (int k = 0; k < 3; k++) {              // pot bars
+    int x = 4 + k * 39, pct = constrain(sysMv[k] / 31, 0, 100);
+    th::cv.drawRect(x, 93, 36, 8, th::p15(th::STEEL));
+    static const uint32_t st[3] = {th::YELLOW, th::ORANGE, th::RED};
+    if (pct) th::grad(x + 1, 94, x + 1 + 34 * pct / 100, 100, st, 3, false);
+  }
+  int n = 0;
+  for (int i = 0; i < K_N; i++) n += (testSeen >> i) & 1;
+  char s[24];
+  snprintf(s, sizeof s, "%d/%d K%+d R2R2:EXIT", n, K_N, testEnc);
+  statusOr(s);
 }
 
 static void testSource(char *s, size_t n, int src, int val) {
-  if (src == 3) snprintf(s, n, "direct pin, GPIO %d", val);
-  else snprintf(s, n, "ladder %d, %d mV", src, val);
+  if (src == 3) snprintf(s, n, "GPIO %d", val);
+  else snprintf(s, n, "LADDER %d  %d MV", src, val);
 }
 
-static void testStatus() {
-  int n = 0;
-  for (int i = 0; i < K_N; i++) n += (testSeen >> i) & 1;
-  char s[40];
-  snprintf(s, sizeof s, "%d/%d ok   knob %+d   R2 x2 = exit", n, K_N, testEnc);
-  displayStatus(s, n == K_N ? C_GRN : C_GREY);
-}
+void uiShow();
 
 void testStart() {
   uiPage = PAGE_TEST;
   testSeen = 0;
   testLast = testPrevKey = -1;
   testEnc = 0;
-  snprintf(testBig, sizeof testBig, "press");
-  snprintf(testSmall, sizeof testSmall, "every button lights its box");
-  testCol = C_GREY;
+  snprintf(testBig, sizeof testBig, "PRESS");
+  snprintf(testSmall, sizeof testSmall, "ANY BUTTON");
+  testCol = th::STEEL_L;
   uiShow();
 }
 
 static void testPress(int b) {
   if (b == K_R2 && testPrevKey == K_R2) { uiPage = PAGE_FX; menu.cursor = 0; uiShow(); return; }
   testPrevKey = b;
-  int prev = testLast;
   testLast = b;
   testSeen |= 1 << b;
-  if (prev >= 0 && prev != b) testTile(prev);
-  testTile(b);
-  char s[32];
-  testSource(s, sizeof s, lastBtnSrc, lastBtnVal);
-  testInfo(BTN_NAMES[b], s, C_YEL);
-  testStatus();
+  testSource(testSmall, sizeof testSmall, lastBtnSrc, lastBtnVal);
+  snprintf(testBig, sizeof testBig, "%s", BTN_NAMES[b]);
+  testCol = th::YELLOW;
+  uiDirty = true;
 }
 
 // From btnEvent: a press that matches no learned button
 void uiUnknown(int src, int val) {
   if (uiPage != PAGE_TEST || !liveOn || faceOn) return;
   testPrevKey = -1;
-  char s[32];
-  testSource(s, sizeof s, src, val);
-  testInfo("??", s, C_RED);
+  testSource(testSmall, sizeof testSmall, src, val);
+  snprintf(testBig, sizeof testBig, "??");
+  testCol = th::RED;
+  uiDirty = true;
 }
 
-// From controlsTick (every 50 ms): pot bars, redrawn when a pot moves
+// From controlsTick (every 50 ms): the live values for the SYSTEM / test pages
 void testPots(const int *v) {
-  if (uiPage != PAGE_TEST || !liveOn || faceOn || learnIdx >= 0) return;
-  for (int k = 0; k < 3; k++) {
-    if (abs(v[k] - testPotShown[k]) <= 30) continue;
-    testPotShown[k] = v[k];
-    int x = 6 + k * 78, w = 72, pct = constrain(v[k] / 31, 0, 100);
-    char s[16];
-    snprintf(s, sizeof s, "POT%d %d%%", k + 1, pct);
-    tft.setFont(&fonts::Font2);
-    tft.setTextDatum(top_left);
-    tft.setTextPadding(w);
-    tft.setTextColor(C_YEL, C_BG);
-    tft.drawString(s, x, 172);
-    tft.setTextPadding(0);
-    tft.fillRect(x, 191, w, 10, 0x303030);
-    tft.fillRect(x, 191, w * pct / 100, 10, C_YEL);
+  static int shown[5] = {-9999, -9999, -9999, -9999, -9999};
+  bool moved = false;
+  for (int k = 0; k < 5; k++) {
+    sysMv[k] = v[k];
+    if (abs(v[k] - shown[k]) > (k < 3 ? 30 : 20)) { shown[k] = v[k]; moved = true; }
   }
+  if (moved && (uiPage == PAGE_TEST || uiPage == PAGE_SYS)) uiDirty = true;
 }
 
-// Draw the current page from scratch
+// ---- pages
+static void drawFX(uint32_t now) {
+  backdrop();
+  th::header("FX", now, 0);
+  char v[24];
+  th::row(28, "MODE", MODE_NAMES[menu.mode], menu.cursor == 0, false, now, th::slide(now, pageT0, 0));
+  snprintf(v, sizeof v, menu.byp1 ? "%s OFF" : "%s", FX_NAMES[menu.fx1]);
+  th::row(46, "FX 1", v, menu.cursor == 1, menu.byp1, now, th::slide(now, pageT0, 1));
+  snprintf(v, sizeof v, menu.byp2 ? "%s OFF" : "%s", FX_NAMES[menu.fx2]);
+  th::row(64, "FX 2", v, menu.cursor == 2, menu.mode == 0 || menu.byp2, now, th::slide(now, pageT0, 2));
+  if (now - pageT0 > 250) {                  // routing line, once the rows have landed
+    char s[32];
+    const char *a = menu.byp1 ? "-" : FX_NAMES[menu.fx1], *b = menu.byp2 ? "-" : FX_NAMES[menu.fx2];
+    if (menu.mode == 0) snprintf(s, sizeof s, "IN > %s > OUT", a);
+    else {
+      a = menu.byp1 ? "-" : FX_SHORT[menu.fx1]; b = menu.byp2 ? "-" : FX_SHORT[menu.fx2];
+      snprintf(s, sizeof s, menu.mode == 1 ? "IN>%s+%s>OUT" : "IN>%s>%s>OUT", a, b);
+    }
+    th::text(60, 89, s, th::p15(th::ORANGE), 1, 'm');
+  }
+  statusOr("KNOB:EDIT T6/B6:MOVE");
+}
+
+static void drawTune(uint32_t now) {
+  backdrop();
+  th::header("TUNE", now, 1);
+  char v[16];
+  th::row(28, "KEY", KEY_NAMES[menu.key], menu.cursor == 0, false, now, th::slide(now, pageT0, 0));
+  th::row(46, "SCALE", SCALE_NAMES[menu.scale], menu.cursor == 1, false, now, th::slide(now, pageT0, 1));
+  snprintf(v, sizeof v, menu.speed >= 9 ? "%d ROBOT" : (menu.speed <= 2 ? "%d NATURAL" : "%d"), menu.speed);
+  th::row(64, "SPEED", v, menu.cursor == 2, false, now, th::slide(now, pageT0, 2));
+  bool on = menu.fx1 == 4 || (menu.mode != 0 && menu.fx2 == 4);
+  if (!on) th::text(60, 89, "SET AN FX TO TUNE", th::p15(th::RED), 1, 'm');
+  statusOr("KNOB:EDIT T6/B6:MOVE");
+}
+
+extern bool dspAwake;                        // face.h: the power switch says the DSP runs
+
+static void drawSys(uint32_t now) {
+  backdrop();
+  th::header("SYSTEM", now, 2);
+  char s[32];
+  th::text(4, 27, "POTS", th::p15(th::STEEL_L));
+  for (int k = 0; k < 3; k++) {              // pot bars
+    int x = 34 + k * 28, pct = constrain(sysMv[k] / 31, 0, 100);
+    th::cv.drawRect(x, 27, 25, 7, th::p15(th::STEEL));
+    static const uint32_t st[3] = {th::YELLOW, th::ORANGE, th::RED};
+    if (pct) th::grad(x + 1, 28, x + 1 + 23 * pct / 100, 33, st, 3, false);
+  }
+  int y = 39;
+  snprintf(s, sizeof s, "%d MV", sysMv[3]);
+  th::text(4, y, "LADDER 1", th::p15(th::STEEL_L)); th::text(116, y, s, th::p15(th::WHITE), 1, 'r');
+  snprintf(s, sizeof s, "%d MV", sysMv[4]);
+  th::text(4, y + 11, "LADDER 2", th::p15(th::STEEL_L)); th::text(116, y + 11, s, th::p15(th::WHITE), 1, 'r');
+  snprintf(s, sizeof s, "%d", encSteps / 4);
+  th::text(4, y + 22, "ENCODER", th::p15(th::STEEL_L)); th::text(116, y + 22, s, th::p15(0x28C8E6), 1, 'r');
+  th::text(4, y + 33, "DSP", th::p15(th::STEEL_L));
+  th::text(116, y + 33, dspAwake ? "ON" : "OFF (SWITCH)", th::p15(dspAwake ? 0x30D060 : th::RED), 1, 'r');
+  if (WiFi.status() == WL_CONNECTED) {
+    int r = WiFi.RSSI();
+    snprintf(s, sizeof s, "WIFI %dDBM", r);
+    th::text(4, y + 44, s, th::p15(r > -70 ? 0x30D060 : (r > -80 ? th::YELLOW : th::RED)));
+    th::text(116, y + 55, WiFi.localIP().toString().c_str(), th::p15(th::WHITE), 1, 'r');
+  } else th::text(4, y + 44, "WIFI CONNECTING..", th::p15(th::STEEL));
+  statusOr("ENTER:BUTTON TEST");
+}
+
+void uiRedraw(uint32_t now) {
+  if (!th::ready) return;
+  if (uiPage == PAGE_FX) drawFX(now);
+  else if (uiPage == PAGE_TUNE) drawTune(now);
+  else if (uiPage == PAGE_SYS) drawSys(now);
+  else drawTest(now);
+  uint32_t t = millis();
+  th::present();
+  uiLastPushMs = millis() - t;
+}
+
+// Draw the current page now (a new page restarts the fly-in)
 void uiShow() {
   liveOn = true;
   faceOn = false;
-  if (uiPage == PAGE_SYS) {
-    displayBegin(); liveRedraw(); wifiShow();
-    displayStatus("enter = button test", C_GREY);
-    return;
-  }
-  if (uiPage == PAGE_TEST) {
-    pageHeader("BUTTON TEST");
-    for (int i = 0; i < K_N; i++) testTile(i);
-    testInfo(testBig, testSmall, testCol);
-    for (int &s : testPotShown) s = -9999;  // next controlsTick draws the bars
-    testStatus();
-    return;
-  }
-  char v[24];
-  if (uiPage == PAGE_FX) {
-    pageHeader("FX");
-    menuItem(0, "MODE", MODE_NAMES[menu.mode], menu.cursor == 0, false);
-    snprintf(v, sizeof v, menu.byp1 ? "%s  off" : "%s", FX_NAMES[menu.fx1]);
-    menuItem(1, "FX 1", v, menu.cursor == 1, menu.byp1);
-    snprintf(v, sizeof v, menu.byp2 ? "%s  off" : "%s", FX_NAMES[menu.fx2]);
-    menuItem(2, "FX 2", v, menu.cursor == 2, menu.mode == 0 || menu.byp2);
-    fxRouting();
-    displayStatus("knob = change   K_T6/K_B6 = select", C_GREY);
-  } else {
-    pageHeader("TUNE");
-    menuItem(0, "KEY", KEY_NAMES[menu.key], menu.cursor == 0, false);
-    menuItem(1, "SCALE", SCALE_NAMES[menu.scale], menu.cursor == 1, false);
-    snprintf(v, sizeof v, menu.speed >= 9 ? "%d  ROBOT" : (menu.speed <= 2 ? "%d  NATURAL" : "%d"), menu.speed);
-    menuItem(2, "SPEED", v, menu.cursor == 2, false);
-    bool on = menu.fx1 == 4 || (menu.mode != 0 && menu.fx2 == 4);
-    displayStatus(on ? "knob = change   T6/B6 = select" : "set FX 1 or FX 2 to TUNE", C_GREY);
-  }
+  if (uiPage != lastPage) { pageT0 = millis(); lastPage = uiPage; }
+  uiDirty = false;
+  uiRedraw(millis());
+}
+
+// Call every loop: keeps the visible page animated
+void uiAnimTick() {
+  if (!th::ready || !liveOn || faceOn || learnIdx >= 0) return;
+  static uint32_t last = 0;
+  uint32_t now = millis();
+  uint32_t period = now - pageT0 < 600 ? 40 : 110;   // fly-in fast, then ~9 fps for the lava / flames / shimmer
+  if (!uiDirty && now - last < period) return;
+  last = now;
+  uiDirty = false;
+  uiRedraw(now);
 }
 
 static void send(uint8_t aa, int v) {
   bool ok = onceWriteX(aa, v);
-  displayStatus(ok ? "sent to DSP" : "DSP not answering", ok ? C_GRN : C_RED);
+  displayStatus(ok ? "SENT TO DSP" : "DSP NOT ANSWERING", ok ? 0x30D060 : th::RED);
 }
 
 // Autotune params (dsp/autotune.py): X:$0B retune speed (Q23 per sample), X:$23-$2E snap map = signed semitone
@@ -237,12 +275,11 @@ static void tuneSend() {
   uint32_t v[13];
   tuneFill(aa, v);
   bool ok = onceWriteXMany(aa, v, 13);
-  displayStatus(ok ? "tune sent to DSP" : "DSP not answering", ok ? C_GRN : C_RED);
+  displayStatus(ok ? "TUNE SENT" : "DSP NOT ANSWERING", ok ? 0x30D060 : th::RED);
 }
 
 // ---- Pots -> the kernel's output stage (normal / vocal mode): POT1 volume, POT2 dry/wet mix, POT3 tone.
 // (A later pedal mode can hand the three pots to the effect itself.)
-extern bool dspAwake;                        // face.h: the power switch says the DSP runs
 static const uint8_t POT_AA[4] = {0x2F, 0x3D, 0x3E, 0x3C};   // dry gain, wet gain, tone k, volume (dsp/os.py)
 static int potSent[3] = {-9999, -9999, -9999};
 
@@ -296,7 +333,7 @@ bool uiPushAll() {
   potFill(mv, v + 16);
   bool ok = onceWriteXMany(aa, v, 20);
   if (ok) for (int k = 0; k < 3; k++) potSent[k] = mv[k];
-  displayStatus(ok ? "panel state sent to DSP" : "DSP not answering", ok ? C_GRN : C_RED);
+  displayStatus(ok ? "PANEL -> DSP" : "DSP NOT ANSWERING", ok ? 0x30D060 : th::RED);
   return ok;
 }
 
@@ -304,17 +341,17 @@ bool uiPushAll() {
 static void uiChange(int d) {
   int c = menu.cursor;
   if (uiPage == PAGE_FX) {
-    if (c == 0) { menu.mode = wrapv(menu.mode + d, N_MODES); uiShow(); send(0x20, menu.mode); }
-    if (c == 1) { menu.fx1 = wrapv(menu.fx1 + d, N_FX); uiShow(); if (!menu.byp1) send(0x21, menu.fx1); }
-    if (c == 2) { menu.fx2 = wrapv(menu.fx2 + d, N_FX); uiShow(); if (!menu.byp2) send(0x22, menu.fx2); }
+    if (c == 0) { menu.mode = wrapv(menu.mode + d, N_MODES); send(0x20, menu.mode); }
+    if (c == 1) { menu.fx1 = wrapv(menu.fx1 + d, N_FX); if (!menu.byp1) send(0x21, menu.fx1); }
+    if (c == 2) { menu.fx2 = wrapv(menu.fx2 + d, N_FX); if (!menu.byp2) send(0x22, menu.fx2); }
     if ((c == 1 && menu.fx1 == 4) || (c == 2 && menu.fx2 == 4)) tuneSend();  // TUNE picked: push its settings
   } else if (uiPage == PAGE_TUNE) {
     if (c == 0) menu.key = wrapv(menu.key + d, 12);
     if (c == 1) menu.scale = wrapv(menu.scale + d, 3);
     if (c == 2) menu.speed = constrain(menu.speed + d, 0, 10);
-    uiShow();
     tuneSend();
   }
+  uiShow();
 }
 
 static void cursorMove(int d) {
@@ -326,8 +363,8 @@ static void cursorMove(int d) {
 static void bypass(int which) {
   bool &b = which == 1 ? menu.byp1 : menu.byp2;
   b = !b;
-  if (uiPage == PAGE_FX) uiShow();
   send(which == 1 ? 0x21 : 0x22, b ? 0 : (which == 1 ? menu.fx1 : menu.fx2));  // bypass = CLEAN in that slot
+  if (uiPage == PAGE_FX) uiShow();
 }
 
 void uiButton(int b) {
@@ -348,8 +385,8 @@ void uiButton(int b) {
     case K_B2: bypass(2); break;
     default: {
       char m[24];
-      snprintf(m, sizeof m, "%s: not assigned yet", BTN_NAMES[b]);
-      displayStatus(m, C_GREY);
+      snprintf(m, sizeof m, "%s: NOT ASSIGNED", BTN_NAMES[b]);
+      displayStatus(m, th::STEEL_L);
     }
   }
 }
@@ -363,7 +400,7 @@ void uiTick() {
   last = s;
   if (learnIdx >= 0) { btnLearnSkip(); return; }
   if (faceOn || !liveOn) return;  // consumed: waking the face / serial owns the screen
-  if (uiPage == PAGE_TEST) { testEnc += d; testStatus(); return; }
+  if (uiPage == PAGE_TEST) { testEnc += d; uiDirty = true; return; }
   uiChange(d);
 }
 
@@ -378,3 +415,10 @@ void menuKey(char k) {
 }
 
 void menuDraw() { uiPage = PAGE_FX; uiShow(); }
+
+// Which pedal the idle screen shows (or -1 = vocal: the face sings): FX1, else FX2 when it is in the chain
+int idlePedal() {
+  if (FX_PEDAL[menu.fx1]) return menu.fx1;
+  if (menu.mode != 0 && FX_PEDAL[menu.fx2]) return menu.fx2;
+  return -1;
+}

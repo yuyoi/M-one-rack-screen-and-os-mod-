@@ -9,6 +9,7 @@
 #include "tee.h"          // first: Serial = UART + WiFi TCP port 23
 #include <SPI.h>
 #include "display.h"
+#include "theme.h"         // PS1 heavy-metal look: canvas, pixel font, animations (after display.h)
 #include "controls.h"
 #include "ota.h"
 #include "buttons.h"
@@ -599,6 +600,7 @@ void setup() {
   delay(500);
   Serial.println("M-One dev tool ready: j=id o=regs D=flash dump P=pmem L=load G=go F=fx page i=system page K=learn buttons W=wifi");
   displayBegin();
+  if (th::begin()) th::bootSplash(1500);          // spinning low-poly logo + flame progress bar
   controlsBegin();
   wifiStart();
   faceBegin();
@@ -616,6 +618,7 @@ void loop() {
   otaTick();
   faceTick();
   uiTick();
+  uiAnimTick();                                   // keeps the visible page animated
   dspWatch();
   if (!Serial.available()) return;
   char c = Serial.read();
@@ -631,6 +634,7 @@ void loop() {
     case 'V': cmdValues(); Serial.printf("VALUES dsp-sense GPIO3 = %s\n", digitalRead(PIN_DSP_SENSE) ? "HIGH (on)" : "LOW (off)");
               Serial.printf("VALUES wifi %d dBm\n", WiFi.RSSI());
               Serial.printf("VALUES menu mode=%d fx1=%d fx2=%d bypass=%d/%d\n", menu.mode, menu.fx1, menu.fx2, menu.byp1, menu.byp2);
+              Serial.printf("VALUES ui frame %lu ms\n", (unsigned long)uiLastPushMs);
               break;
     case 'T': testStart(); Serial.println("button test page (R2 twice on the panel = exit)"); break;
     case 'A': Serial.printf("LEVEL %06lX\n", dspLevel()); break;   // output envelope (no halt)

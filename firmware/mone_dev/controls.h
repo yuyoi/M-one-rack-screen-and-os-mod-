@@ -1,6 +1,8 @@
 // Control inputs: 3 pots, 2 resistor ladders (all ADC1), EC11 encoder without switch.
 // Live readout on screen rows 0-3 whenever liveOn is set. Any serial command takes the rows over; 'i' gives them back.
 #pragma once
+#include <soc/soc.h>
+#include <soc/gpio_reg.h>
 
 const int PIN_POT[3] = {5, 6, 7};          // wipers; outer lugs 3V3 / GND
 const int PIN_LADDER[2] = {1, 2};          // own 10k to 3V3 each, buttons pull down through their own resistor
@@ -23,18 +25,42 @@ uint32_t lastActivity = 0;                 // last time any control moved
 int actLook = 0;                           // where the face glances: -1 = pots (left of screen), +1 = buttons/encoder
 
 void faceActivity(int dir) { lastActivity = millis(); actLook = dir; }
-static int encSteps = 0;                   // quadrature transitions; one detent = 4
-static uint8_t encPrev = 0;
-static int encAcc = 0;                     // 1 = step taken, waiting to get back to the detent
-bool encLog = false;                       // raw A/B transitions to serial (debug; 'E' toggles)
+static volatile int encSteps = 0;          // quadrature transitions; one detent = 4 (updated by the pin interrupt)
+static volatile uint8_t encPrev = 0;
+static volatile int encAcc = 0;            // 1 = step taken, waiting to get back to the detent
+bool encLog = false;                       // step count to serial (debug; 'E' toggles)
 static int shown[6] = {-9999, -9999, -9999, -9999, -9999, -9999};
 static int ladState[2] = {-1, -1};         // 1 = pressed
+
+// Encoder pins straight from the GPIO input register (IRAM-safe: digitalRead lives in flash). Both pins are >= 32.
+static inline uint8_t encRead() {
+  uint32_t in = REG_READ(GPIO_IN1_REG);
+  return (((in >> (PIN_ENC_A - 32)) & 1) << 1) | ((in >> (PIN_ENC_B - 32)) & 1);
+}
+
+// One step per detent, decided by the FIRST FALLING edge when the knob leaves the detent (both pins high):
+// A falls first = +1, B falls first = -1. Rising edges are ignored: the TC board slows A's rise (RC), so the
+// rise order is wrong turning right (logged 2026-10-16: right = 11>01>00>01>11, which a full decoder nets to 0).
+// Falls are fast (contact to GND), so they are reliable. Re-armed once both pins are high again.
+// Runs on every pin change (interrupt), so steps are never lost while a screen frame is being pushed.
+void IRAM_ATTR encIsr() {
+  uint8_t s = encRead();
+  if (s == encPrev) return;
+  if (encPrev == 3 && encAcc == 0) {       // leaving the detent
+    if (s == 1) { encSteps = encSteps + 4; encAcc = 1; }        // 11 -> 01: A fell first
+    else if (s == 2) { encSteps = encSteps - 4; encAcc = 1; }   // 11 -> 10: B fell first
+  }
+  if (s == 3) encAcc = 0;                  // back in a detent: re-arm
+  encPrev = s;
+}
 
 void controlsBegin() {
   pinMode(PIN_ENC_A, INPUT_PULLUP);
   pinMode(PIN_ENC_B, INPUT_PULLUP);
   for (int p : PIN_BTN) pinMode(p, INPUT_PULLUP);
-  encPrev = (digitalRead(PIN_ENC_A) << 1) | digitalRead(PIN_ENC_B);
+  encPrev = encRead();
+  attachInterrupt(digitalPinToInterrupt(PIN_ENC_A), encIsr, CHANGE);
+  attachInterrupt(digitalPinToInterrupt(PIN_ENC_B), encIsr, CHANGE);
   analogSetAttenuation(ADC_11db);          // 0..~3.1 V
   for (int k = 0; k < 2; k++) {            // idle level, nothing pressed at power-on
     int sum = 0;
@@ -44,20 +70,10 @@ void controlsBegin() {
   }
 }
 
-// One step per detent, decided by the FIRST FALLING edge when the knob leaves the detent (both pins high):
-// A falls first = +1, B falls first = -1. Rising edges are ignored: the TC board slows A's rise (RC), so the
-// rise order is wrong turning right (logged 2026-10-16: right = 11>01>00>01>11, which a full decoder nets to 0).
-// Falls are fast (contact to GND), so they are reliable. Re-armed once both pins are high again.
+// Debug only now (the interrupt does the decoding): 'E' logs each step
 void encPoll() {
-  uint8_t s = (digitalRead(PIN_ENC_A) << 1) | digitalRead(PIN_ENC_B);
-  if (s == encPrev) return;
-  if (encLog) Serial.printf("ENC %lu ms  %d%d -> %d%d\n", millis(), encPrev >> 1, encPrev & 1, s >> 1, s & 1);
-  if (encPrev == 3 && encAcc == 0) {       // leaving the detent
-    if (s == 1) { encSteps += 4; encAcc = 1; }        // 11 -> 01: A fell first
-    else if (s == 2) { encSteps -= 4; encAcc = 1; }   // 11 -> 10: B fell first
-  }
-  if (s == 3) encAcc = 0;                  // back in a detent: re-arm
-  encPrev = s;
+  static int last = 0;
+  if (encLog && encSteps != last) { Serial.printf("ENC %lu ms  step %d\n", millis(), encSteps / 4); last = encSteps; }
 }
 
 // 'V': raw readout for remote checks (pots and ladders in mV, ladder idle levels, encoder count)

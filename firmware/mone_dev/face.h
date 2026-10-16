@@ -1,10 +1,12 @@
-// Idle face: uwu, with orange cheeks (to match the knobs), drawn into an 8-bit sprite.
-// No input for FACE_AFTER_MS -> the face replaces the live readout. It blinks, looks around, glances left when a pot
-// moves (the knobs sit left of the screen) and right for buttons/encoder. No input for SLEEP_AFTER_MS -> it dozes.
-// Any input wakes it (wide eyes toward the input for a moment), then the page comes back.
-// It SINGS along with the audio: the kernel's output envelope (read over JTAG without halting the DSP) opens the
-// mouth, loud parts close the eyes to ^ ^, the head lifts with the level and music notes float up. Sound keeps it
-// from dozing, but doesn't bring the menu back.
+// Idle screen. No input for FACE_AFTER_MS -> it replaces the page (theme.h canvas, PS1 look):
+//  - a VOCAL effect selected: the uwu face, orange cheeks, ember glow that pulses with the sound. It blinks, looks around,
+//    glances left when a pot moves (the knobs sit left of the screen) and right for buttons/encoder.
+//    No input for SLEEP_AFTER_MS -> it dozes. Any input wakes it (wide eyes toward the input), then the page comes back.
+//    It SINGS along with the audio: the kernel's output envelope (read over JTAG without halting the DSP) opens the
+//    mouth, loud parts close the eyes to ^ ^, the head lifts with the level and music notes float up. Sound keeps it
+//    from dozing, but doesn't bring the menu back.
+//  - a PEDAL effect selected (menu.h FX_PEDAL): a mock pedal instead; its knobs follow the pots, its LED flickers with
+//    the signal (dark when bypassed).
 // DSP off (dspWatch in the .ino: power switch out) -> asleep no matter what; backlight off after 5 min without input.
 // Never on the button test page.
 #pragma once
@@ -12,10 +14,8 @@
 uint32_t dspLevel();                       // .ino: output envelope from the kernel (OGDB), no halt
 
 const uint32_t FACE_AFTER_MS = 8000, SLEEP_AFTER_MS = 60000, SURPRISE_MS = 450;
-const int FACE_Y = 40, FACE_H = 160;       // sprite band on screen (keeps pushes short: ~30 ms at 20 MHz)
 const uint32_t C_CHEEK = 0xE8702A;
 
-static LGFX_Sprite faceSpr(&tft);
 static bool faceReady = false;
 static float lookX = 0, tgtX = 0;
 static uint32_t nextBlink = 0, nextLook = 0, blinkStart = 0, surpriseT = 0;
@@ -25,9 +25,8 @@ bool dspAwake = true;                      // set by dspWatch() in the .ino: fal
 const uint32_t BACKLIGHT_OFF_MS = 300000;  // DSP off and no input this long -> backlight off
 
 void faceBegin() {
-  faceSpr.setColorDepth(8);
-  faceReady = faceSpr.createSprite(240, FACE_H) != nullptr;
-  if (!faceReady) Serial.println("face: no RAM for sprite, face disabled");
+  faceReady = th::ready;                   // draws into the theme canvas (th::begin in setup)
+  if (!faceReady) Serial.println("face: no canvas, face disabled");
 }
 
 // ---- Singing
@@ -51,15 +50,15 @@ static void singTick(uint32_t now) {       // one JTAG read per frame (~2 ms, th
 }
 
 static void drawNote(int x, int y, uint32_t c) {          // an eighth note: head, stem, flag
-  faceSpr.fillEllipse(x, y, 5, 4, c);
-  faceSpr.fillRect(x + 3, y - 17, 2, 17, c);
-  faceSpr.fillTriangle(x + 5, y - 17, x + 12, y - 11, x + 5, y - 9, c);
+  th::cv.fillEllipse(x, y, 3, 2, c);
+  th::cv.fillRect(x + 2, y - 9, 1, 9, c);
+  th::cv.fillTriangle(x + 3, y - 9, x + 6, y - 6, x + 3, y - 5, c);
 }
 
 static void notesTick(uint32_t now, bool singing, int mx, int my) {
   if (singing && now > nextNote) {         // a new note from the side of the mouth
     for (auto &n : faceNotes) if (!n.on) {
-      n = {(float)(mx + noteSide * 38), (float)(my + 4), now, true};
+      n = {(float)(mx + noteSide * 19), (float)(my + 2), now, true};
       noteSide = -noteSide;
       break;
     }
@@ -67,17 +66,27 @@ static void notesTick(uint32_t now, bool singing, int mx, int my) {
   }
   for (auto &n : faceNotes) {
     if (!n.on) continue;
-    float age = (now - n.t) / 1400.0f;     // rises ~60 px over 1.4 s with a little wiggle
+    float age = (now - n.t) / 1400.0f;     // rises ~31 px over 1.4 s with a little wiggle
     if (age >= 1) { n.on = false; continue; }
-    int x = (int)(n.x + 6 * sinf(age * 9) + (n.x > 120 ? 20 : -20) * age), y = (int)(n.y - 62 * age);
-    drawNote(x, y, age < 0.7f ? C_BLUE : 0x1F5480);   // dims before it vanishes
+    int x = (int)(n.x + 3 * sinf(age * 9) + (n.x > 60 ? 10 : -10) * age), y = (int)(n.y - 31 * age);
+    drawNote(x, y, th::p15(age < 0.7f ? (n.x > 60 ? th::ORANGE : th::YELLOW) : th::EMBER));   // dims before it vanishes
   }
+}
+
+static void pedalDraw(uint32_t now, int fx) {
+  bool byp = fx == menu.fx1 ? menu.byp1 : menu.byp2;
+  float k[3];
+  for (int i = 0; i < 3; i++) k[i] = constrain(sysMv[i] / 3100.0f, 0.0f, 1.0f);
+  static const char *const L[3] = {"VOL", "MIX", "TONE"};
+  th::pedal(FX_NAMES[fx], FX_COL[fx], k, L, byp || !dspAwake ? 0.0f : 0.45f + 0.55f * singLev, now);
 }
 
 static void faceDraw(uint32_t now) {
   singTick(now);
   bool asleep = !dspAwake || (now - lastActivity > SLEEP_AFTER_MS && now - lastSoundMs > 4000);
   if (asleep) lastAsleepMs = now;
+  int ped = idlePedal();
+  if (ped >= 0) { pedalDraw(now, ped); th::present(); return; }
   bool surprised = surpriseT && now - surpriseT < SURPRISE_MS;
   bool singing = !asleep && !surprised && singLev > 0.12f;
   bool belting = singing && singLev > 0.5f;
@@ -88,42 +97,40 @@ static void faceDraw(uint32_t now) {
   if (surprised) tgtX = actLook * 26;
   else if (now > nextLook) { tgtX = asleep ? 0 : random(-16, 17); nextLook = now + 1500 + random(2500); }
   lookX += (tgtX - lookX) * 0.2f;
-  int dx = (int)lookX, bob = asleep ? 0 : (int)(3 * sinf(now / 600.0f)) - (singing ? (int)(singLev * 7) : 0);
+  int dx = (int)lookX / 2, bob = asleep ? 0 : (int)(1.5f * sinf(now / 600.0f)) - (singing ? (int)(singLev * 4) : 0);
 
-  faceSpr.fillScreen(0);
+  th::vignette(asleep ? 0.25f : 0.35f + 0.65f * singLev);
+  const uint32_t Y = th::p15(th::YELLOW), B = th::BLACK;
   for (int s = -1; s <= 1; s += 2) {      // eyes: "u" (open), "-" (blink / asleep), "o" (surprised), "^" (belting)
-    int cx = 120 + s * 56 + dx, cy = 66 + bob;
-    if (surprised) { faceSpr.fillCircle(cx, cy, 22, C_YEL); faceSpr.fillCircle(cx, cy, 13, 0); }
-    else if (belting) faceSpr.fillArc(cx, cy + 8, 22, 13, 180, 360, C_YEL);   // top half ring: happy closed eyes
-    else if (blinking || asleep) faceSpr.fillRoundRect(cx - 22, cy + 4, 44, 8, 4, C_YEL);
+    int cx = 60 + s * 28 + dx, cy = 53 + bob;
+    if (surprised) { th::cv.fillCircle(cx, cy, 11, Y); th::cv.fillCircle(cx, cy, 6, B); }
+    else if (belting) th::cv.fillArc(cx, cy + 4, 11, 6, 180, 360, Y);       // top half ring: happy closed eyes
+    else if (blinking || asleep) th::cv.fillRoundRect(cx - 11, cy + 2, 22, 4, 2, Y);
     else {
-      faceSpr.fillArc(cx, cy, 22, 13, 0, 180, C_YEL);          // bottom half ring
-      faceSpr.fillRect(cx - 22, cy - 18, 9, 18, C_YEL);         // left stem
-      faceSpr.fillRect(cx + 13, cy - 18, 9, 18, C_YEL);         // right stem
+      th::cv.fillArc(cx, cy, 11, 6, 0, 180, Y);                            // bottom half ring
+      th::cv.fillRect(cx - 11, cy - 9, 5, 9, Y);                           // left stem
+      th::cv.fillRect(cx + 6, cy - 9, 5, 9, Y);                            // right stem
     }
-    faceSpr.fillEllipse(120 + s * 84 + dx / 2, 104 + bob, 12, 6, C_CHEEK);
+    th::cv.fillEllipse(60 + s * 42 + dx / 2, 72 + bob, 6, 3, th::p15(C_CHEEK));
   }
-  int mx = 120 + dx, my = 98 + bob;
+  int mx = 60 + dx, my = 69 + bob;
   if (singing) {                          // mouth: open "o", height follows the level, little tongue
-    int mh = 4 + (int)(singLev * 18), mw = 8 + (int)(singLev * 6), cy = my + 2 + mh;
-    faceSpr.fillEllipse(mx, cy, mw, mh, C_YEL);
-    faceSpr.fillEllipse(mx, cy, mw - 3, mh - 3, 0);
-    if (mh > 8) faceSpr.fillEllipse(mx, cy + mh - 6, mw / 2, 3, C_CHEEK);
+    int mh = 2 + (int)(singLev * 9), mw = 4 + (int)(singLev * 3), cy = my + 1 + mh;
+    th::cv.fillEllipse(mx, cy, mw, mh, Y);
+    th::cv.fillEllipse(mx, cy, max(mw - 2, 1), max(mh - 2, 1), B);
+    if (mh > 4) th::cv.fillEllipse(mx, cy + mh - 3, max(mw / 2, 1), 2, th::p15(th::RED));
   } else {                                // mouth: "w"
-    faceSpr.fillArc(mx - 8, my, 9, 5, 0, 180, C_YEL);
-    faceSpr.fillArc(mx + 8, my, 9, 5, 0, 180, C_YEL);
+    th::cv.fillArc(mx - 4, my, 4, 2, 0, 180, Y);
+    th::cv.fillArc(mx + 4, my, 4, 2, 0, 180, Y);
   }
   notesTick(now, singing, mx, my);
-  if (asleep) {
-    faceSpr.setFont(&fonts::FreeSansBold12pt7b);
-    faceSpr.setTextColor(C_BLUE);
-    faceSpr.setTextDatum(middle_center);
-    for (int i = 0; i < 3; i++) {         // z's drifting up
+  if (asleep)
+    for (int i = 0; i < 3; i++) {          // z's drifting up
       int p = (now / 30 + i * 40) % 120;
-      faceSpr.drawString("z", 200 + p / 6 + i * 4, 60 - p / 3);
+      th::text(100 + p / 12 + i * 2, 50 - p / 6, "Z", th::p15(0x5AA0FF), 1 + (i == 1));
     }
-  }
-  faceSpr.pushSprite(0, FACE_Y);
+  th::text(60, 104, "M-ONE", th::p15(th::EMBER), 1, 'm');
+  th::present();
 }
 
 // Reset combo: hold R1 + T6 (both on direct pins) for 3 s while the face is asleep -> the ESP reboots.
@@ -144,7 +151,7 @@ void comboTick() {
   if (armed && now - since > 3000) {
     Serial.println("COMBO: rebooting");
     backlight(true);
-    displayStatus("rebooting...", C_YEL);
+    if (th::ready) { th::status("REBOOTING...", th::YELLOW); th::present(); }
     delay(300);
     ESP.restart();
   }
@@ -161,12 +168,12 @@ void faceTick() {
     if (!lit) { backlight(true); lit = true; }
     return;
   }
+  static uint32_t lastFrame = 0;
   if (!dspAwake) {                         // DSP off: sleeping face, inputs only light the screen back up
     bool want = now - lastActivity < BACKLIGHT_OFF_MS;
     if (want != lit) { backlight(want); lit = want; }
-    if (!faceOn) { faceOn = true; surpriseT = 0; tft.fillScreen(C_BG); }
-    static uint32_t lastF = 0;
-    if (want && now - lastF >= 40) { lastF = now; faceDraw(now); }
+    if (!faceOn) { faceOn = true; surpriseT = 0; }
+    if (want && now - lastFrame >= 60) { lastFrame = now; faceDraw(now); }
     return;
   }
   if (!lit) { backlight(true); lit = true; }  // DSP back
@@ -174,7 +181,6 @@ void faceTick() {
     if (now - lastActivity < FACE_AFTER_MS) return;
     faceOn = true;
     surpriseT = 0;
-    tft.fillScreen(C_BG);
     nextBlink = now + 800;
   } else if (now - lastActivity < 200 && !surpriseT) {
     surpriseT = now;                         // woken: look toward the input, then hand back
@@ -185,8 +191,7 @@ void faceTick() {
     uiShow();
     return;
   }
-  static uint32_t lastFrame = 0;
-  if (now - lastFrame < 40) return;         // ~25 fps
+  if (now - lastFrame < 60) return;         // ~16 fps (one canvas push per frame)
   lastFrame = now;
   faceDraw(now);
 }

@@ -52,7 +52,9 @@ static int tftMode = 3;
 // Palette: M-One yellow + Rosetta blue on black
 static const uint32_t C_BG = 0x000000, C_YEL = 0xF2C200, C_BLUE = 0x3FA9F5, C_GREY = 0x606060, C_RED = 0xE03030, C_GRN = 0x30D060;
 
+// Status line + SYSTEM rows: defined in menu.h, they feed the theme.h pages
 void displayStatus(const char *line, uint32_t col);
+void displayRow(int row, const char *key, const char *val, uint32_t col);
 
 void backlight(bool on) {
   pinMode(TFT_BLK, OUTPUT);
@@ -65,20 +67,7 @@ void displayBegin() {
   backlight(true);
   tft.init();
   tft.setRotation(1);  // 90 deg clockwise (user mounting)
-  tft.fillScreen(C_BG);
-  tft.fillRect(0, 0, 240, 44, C_YEL);
-  tft.setTextColor(0x000000);
-  tft.setFont(&fonts::FreeSansBold18pt7b);
-  tft.setTextDatum(middle_center);
-  tft.drawString("M-ONE", 120, 23);
-  tft.setFont(&fonts::FreeSans9pt7b);
-  tft.setTextColor(C_BLUE);
-  tft.drawString("new OS - dev build", 120, 64);
-  tft.drawFastHLine(10, 82, 220, C_GREY);
-  tft.setTextColor(C_GREY);
-  tft.setTextDatum(top_left);
-  tft.drawString("DSP  56362 via J8", 12, 92);
-  displayStatus(tftMode == 3 ? "ready (spi mode 3)" : "ready (spi mode 0)", C_GRN);
+  tft.fillScreen(0);   // everything else is drawn by theme.h (boot splash, pages, face)
 }
 
 // Switch SPI mode 3 <-> 0 and redraw (CS-less panels differ)
@@ -88,25 +77,3 @@ void displayToggleMode() {
   displayBegin();
 }
 
-// Bottom status bar
-void displayStatus(const char *line, uint32_t col) {
-  tft.fillRect(0, 206, 240, 34, 0x101010);
-  tft.setFont(&fonts::FreeSans9pt7b);
-  tft.setTextDatum(middle_center);
-  tft.setTextColor(col);
-  tft.drawString(line, 120, 223);
-}
-
-// Key/value row (rows 0..4 between the header and the status bar)
-void displayRow(int row, const char *key, const char *val, uint32_t col) {
-  int y = 116 + row * 18;                  // no fillRect: text draws over its own background, so no flicker
-  tft.setFont(&fonts::Font2);
-  tft.setTextDatum(top_left);
-  tft.setTextPadding(76);
-  tft.setTextColor(C_GREY, C_BG);
-  tft.drawString(key, 12, y);
-  tft.setTextPadding(148);
-  tft.setTextColor(col, C_BG);
-  tft.drawString(val, 90, y);
-  tft.setTextPadding(0);
-}
