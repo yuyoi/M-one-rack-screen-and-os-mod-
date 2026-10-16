@@ -16,6 +16,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 DSP = os.path.join(HERE, '..', 'dsp')
 PY = sys.executable
 SPIN, FRAME = 9.14, 2112
+POKETAB = 0x031B00                     # free SRAM for the poke table (up to $031BFF)
 
 
 def run(*args, check=True):
@@ -33,7 +34,11 @@ def read(port, space, start, count, tmp):
 
 def main():
     port = sys.argv[1]
-    ids = [v if v.startswith('chain:') else int(v) for v in sys.argv[2:]]
+    ids = [v if v.startswith(('chain:', 'preset:')) else int(v) for v in sys.argv[2:] if v != 'presets']
+    if sys.argv[2:] == ['presets']:
+        ids = ['preset:%d' % n for n in range(1, 57)]
+    sys.path.insert(0, DSP)
+    import presets as PR
     tmpd = tempfile.mkdtemp()
     for name in ('autotune.py', 'vocal.py', 'vocal2.py', 'vocal3.py', 'vocal4.py', 'vocal5.py', 'vocal6.py', 'amp.py'):
         subprocess.run([PY, os.path.join(DSP, name)], check=True, capture_output=True)
@@ -51,7 +56,9 @@ def main():
         loop = runpy.run_path(os.path.join(DSP, 'os.py'))['labels']['loop']
     for fx in ids:
         strip = isinstance(fx, str) and fx.endswith('+s')                 # chain:...+s = STRIP on too
-        chain = [int(v) for v in fx.split(':')[1].rstrip('+s').split(',')] if isinstance(fx, str) else None
+        pre = PR.P[int(fx.split(':')[1]) - 1] if isinstance(fx, str) and fx.startswith('preset:') else None
+        chain = pre['chain'] if pre else ([int(v) for v in fx.split(':')[1].rstrip('+s').split(',')]
+                                          if isinstance(fx, str) else None)
         w[k + 1] = '%06X' % (0 if chain else fx)
         osk = os.path.join(tmpd, 'os_m%s.hex' % str(fx).replace(':', '_').replace(',', '_'))
         open(osk, 'w').write(base + '\n' + ' '.join(w) + '\n')
@@ -70,10 +77,21 @@ def main():
             time.sleep(1)
             from asm56 import Asm, R5
             pa = Asm(0x950)
-            for addr, val in ([(0x20, 3), (0x0200, len(chain)), (0x0207, int(strip))]
-                              + [(0x0201 + i, c) for i, c in enumerate(chain)]):
-                pa.par(move=('Movex_ea', dict(W=1, d=R5['A'], M=6, R=4)), ext=val)
-                pa.par(move=('Movex_ea', dict(W=0, d=R5['A'], M=6, R=0)), ext=addr)
+            pairs = (PR.writes(pre) if pre else [(0x20, 3), (0x0200, len(chain)), (0x0207, int(strip))]
+                     + [(0x0201 + i, c) for i, c in enumerate(chain)])
+            tab = os.path.join(tmpd, 'poke_tab.hex')                 # (address, value) pairs in free SRAM
+            open(tab, 'w').write('%X\n%s\n' % (POKETAB, ' '.join('%06X %06X' % (ad, v & 0xFFFFFF) for ad, v in pairs)))
+            out = run(port, 'load', tab)
+            if 'verify OK' not in out:
+                raise SystemExit('poke table: ' + out)
+            from asm56 import ea
+            pa.par(move=('Movex_ea', dict(W=1, d=R5['R0'], M=6, R=4)), ext=POKETAB)
+            pa.do(len(pairs), 'pk_end')
+            pa.par(move=('Movex_ea', dict(W=1, d=R5['R1'], **ea('(R0)+'))))
+            pa.par(move=('Movex_ea', dict(W=1, d=R5['A'], **ea('(R0)+'))))
+            pa.word(0); pa.word(0)
+            pa.par(move=('Movex_ea', dict(W=0, d=R5['A'], **ea('(R1)'))))
+            pa.label('pk_end')
             pa.labels['loop'] = loop
             pa.jmp('loop')
             pa.link()
@@ -89,6 +107,10 @@ def main():
         nz = [(s, c) for s, c in enumerate(hist) if c]
         tot = sum(hist)
         lo = nz[0][0] if nz else -1
+        if pre:
+            fx = '%s %d %s' % (fx, pre['n'], pre['name'])
+        if tot > 2 * 44100 * 12:                    # far more frames than this run: the GO did not restart the kernel
+            print('   WARNING: %d frames = stale histogram (GO failed?): run this one again' % tot)
         print('FX1=%s (read back %d)  frames %d  min spins %d -> worst %d cycles used of %d  (typical %d)' % (
             fx, fx1, tot, lo, FRAME - lo * SPIN, FRAME, FRAME - max(nz, key=lambda t: t[1])[0] * SPIN))
         print('   lowest bins:', nz[:5], ' top bins:', sorted(nz, key=lambda t: -t[1])[:4])
