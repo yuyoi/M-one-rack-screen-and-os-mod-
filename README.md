@@ -13,6 +13,12 @@ with no flashing.
 **Legal:** this repo contains no TC Electronic code or ROM data. You dump **your own** unit's flash, and the tools work
 on your dump locally. Don't share dumps or disassembly listings: share this repo instead.
 
+## Wiring
+![ESP32-S3 wiring: J8 (DSP JTAG/OnCE), J5 (front ribbon) with the power switch, and every ESP pin](docs/wiring.png)
+
+Pin tables and the button ladders are in [`USER_GUIDE.md`](USER_GUIDE.md). The picture is drawn by
+`tools/draw_wiring.py`; rerun it if the wiring changes.
+
 **Using it:** [`USER_GUIDE.md`](USER_GUIDE.md).
 
 **Working on it with an AI model (or by hand)?** Start with [`how-to-reverse-engineer/`](how-to-reverse-engineer/README.md).
