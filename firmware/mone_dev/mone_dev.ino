@@ -537,6 +537,23 @@ bool onceWriteXMany(const uint8_t *aa, const uint32_t *value, int n) {
 
 bool onceWriteX(uint8_t aa, uint32_t value) { return onceWriteXMany(&aa, &value, 1); }
 
+// Long-address X writes (any X:$0000-$FFFF, e.g. the effect param blocks at X:$0210+): move #v,x0 ; move x0,x:$aaaa.
+// All n values in one halt, X0 saved and restored like the short writes.
+bool onceWriteXLong(const uint16_t *aa, const uint32_t *value, int n) {
+  if (!dspAwake) return false;
+  if (!enterDebug(false)) { jPinsDown(); return false; }
+  exec1(0x08C43C);                          // movep x0,x:OGDB
+  uint32_t savedX0 = onceRead(OC_READ_GDB);
+  for (int i = 0; i < n; i++) {
+    exec2(0x44F400, value[i] & 0xFFFFFF);   // move #value,x0
+    exec2(0x447000, aa[i]);                 // move x0,x:$aaaa
+  }
+  exec2(0x44F400, savedX0);                 // restore x0
+  resumeDebug();
+  jPinsDown();
+  return true;
+}
+
 // Read X short addresses in one halt (saves/restores X0 like the writes)
 bool onceReadXMany(const uint8_t *aa, uint32_t *value, int n) {
   if (!dspAwake) return false;

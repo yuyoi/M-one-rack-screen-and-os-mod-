@@ -2,7 +2,7 @@
 // Drawn with theme.h (PS1 heavy-metal look): every page renders itself into the 120x120 canvas from the current state,
 // and uiAnimTick redraws it ~9x a second (faster while the rows fly in) so the lava, flames and selection shimmer move.
 // Buttons by position (buttons.h):
-//   T1 = FX page   T2 = TUNE page   T3 = SYSTEM page (live inputs, WiFi)
+//   T1 = FX page   T2 = TUNE page   T3 = SYSTEM page (live inputs, WiFi)   T5 = EDIT (the effect's own settings)
 //   T6 / B6 = cursor up / down    encoder = change the selected value    R1 / B4 / B5 = enter (value +1)    R2 = back to FX
 //   B1 / B2 = bypass FX1 / FX2 (toggle, works on any page)
 //   SYSTEM page + enter = BUTTON TEST page (every button only lights its box there; R2 twice = back to FX)
@@ -12,18 +12,20 @@
 bool onceWriteX(uint8_t aa, uint32_t value);  // in the .ino
 bool onceWriteXMany(const uint8_t *aa, const uint32_t *value, int n);
 bool onceReadXMany(const uint8_t *aa, uint32_t *value, int n);
+bool onceWriteXLong(const uint16_t *aa, const uint32_t *value, int n);
 
-enum { PAGE_FX, PAGE_TUNE, PAGE_SYS, PAGE_TEST };
+enum { PAGE_FX, PAGE_TUNE, PAGE_SYS, PAGE_TEST, PAGE_EDIT };
 int uiPage = PAGE_FX;
 
 static const char *MODE_NAMES[] = {"SINGLE", "DOUBLE", "DBL-SINGLE"};
-static const char *FX_NAMES[] = {"CLEAN", "HEAVY", "REVERSE", "COMP", "TUNE", "VOX"};
-static const char *FX_SHORT[] = {"CLN", "HVY", "REV", "CMP", "TUNE", "VOX"};          // routing line in DOUBLE modes
-static const bool FX_PEDAL[] = {false, true, true, true, false, false};                 // PEDAL: idle screen = mock pedal
-static const uint32_t FX_COL[] = {0xFF7000, 0xFF7000, 0x963CDC, 0x2E8BFF, 0xFFCC00, 0xE6AA28};   // pedal colours
+static const char *FX_NAMES[] = {"CLEAN", "HEAVY", "REVERSE", "COMP", "TUNE", "VOX", "AMP", "RADIO", "FORMANT", "OCTAVE"};
+static const char *FX_SHORT[] = {"CLN", "HVY", "REV", "CMP", "TUNE", "VOX", "AMP", "RAD", "FMT", "OCT"};   // DOUBLE routing line
+static const bool FX_PEDAL[] = {false, true, true, true, false, false, true, false, false, false};   // PEDAL: mock pedal idle
+static const uint32_t FX_COL[] = {0xFF7000, 0xFF7000, 0x963CDC, 0x2E8BFF, 0xFFCC00, 0xE6AA28, 0xE82010, 0xAA4614,
+                                  0xE82010, 0x963CDC};                                   // pedal colours
 static const char *KEY_NAMES[] = {"C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"};
 static const char *SCALE_NAMES[] = {"CHROMATIC", "MAJOR", "MINOR"};
-static const int N_MODES = 3, N_FX = 6;
+static const int N_MODES = 3, N_FX = 10;
 static const uint8_t SCALE_STEPS[3][12] = {
   {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11},  // chromatic
   {0, 2, 4, 5, 7, 9, 11, 0, 0, 0, 0, 0},   // major (7 used)
@@ -216,11 +218,14 @@ static void drawSys(uint32_t now) {
   statusOr("ENTER:BUTTON TEST");
 }
 
+static void drawEdit(uint32_t now);         // below, with the effect settings
+
 void uiRedraw(uint32_t now) {
   if (!th::ready) return;
   if (uiPage == PAGE_FX) drawFX(now);
   else if (uiPage == PAGE_TUNE) drawTune(now);
   else if (uiPage == PAGE_SYS) drawSys(now);
+  else if (uiPage == PAGE_EDIT) drawEdit(now);
   else drawTest(now);
   uint32_t t = millis();
   th::present();
@@ -297,6 +302,112 @@ static void potFill(const int *mv, uint32_t *v) {
   v[3] = q23(vol);
 }
 
+// ---- Effect settings: long X writes into each effect's param block (VOCAL_ARCH.md "Param maps"). T5 = EDIT page.
+enum { PK_ENUM, PK_PCT, PK_TRIM, PK_SEMI, PK_RATIO, PK_GAIN };
+struct FxParam { const char *name; uint16_t addr; uint8_t kind; int v, lo, hi; const char *const *labels; };
+static const char *const RADIO_MODES[] = {"TELEPHONE", "MEGAPHONE", "AM RADIO", "WALKIE", "CASSETTE", "VINYL"};
+static const char *const VOICES[] = {"GIANT", "MONSTER", "CHIPMUNK", "ELF", "M > F", "F > M", "CUSTOM"};
+static const int VOICE_F[6] = {78, 70, 135, 125, 118, 85};     // formant ratio x100
+static const int VOICE_P[6] = {0, -5, 7, 3, 5, -5};           // pitch, semitones
+static FxParam radioP[] = {
+  {"MODE", 0x0210, PK_ENUM, 0, 0, 5, RADIO_MODES}, {"WET", 0x0211, PK_PCT, 100, 0, 100, nullptr},
+  {"DRIVE", 0x0212, PK_TRIM, 100, 0, 200, nullptr}, {"NOISE", 0x0213, PK_TRIM, 100, 0, 200, nullptr}};
+static FxParam formantP[] = {
+  {"VOICE", 0, PK_ENUM, 0, 0, 6, VOICES},                       // UI only: sets THROAT + PITCH
+  {"THROAT", 0x0221, PK_RATIO, 78, 50, 160, nullptr}, {"PITCH", 0x0220, PK_SEMI, 0, -12, 12, nullptr},
+  {"WET", 0x0222, PK_PCT, 100, 0, 100, nullptr}, {"GAIN", 0x0223, PK_GAIN, 100, 0, 200, nullptr}};
+static FxParam octaveP[] = {
+  {"PITCH", 0x0230, PK_SEMI, -12, -12, 12, nullptr}, {"THROAT", 0x0231, PK_RATIO, 100, 50, 160, nullptr},
+  {"WET", 0x0232, PK_PCT, 50, 0, 100, nullptr}, {"GAIN", 0x0233, PK_GAIN, 141, 0, 200, nullptr}};
+struct FxParams { FxParam *p; int n; };
+
+static FxParams fxParams(int fx) {
+  if (fx == 7) return {radioP, 4};
+  if (fx == 8) return {formantP, 5};
+  if (fx == 9) return {octaveP, 4};
+  return {nullptr, 0};
+}
+
+static uint32_t paramWord(const FxParam &p) {
+  switch (p.kind) {
+    case PK_ENUM: return (uint32_t)p.v;
+    case PK_PCT: return q23(p.v / 100.0f);                                        // wet 0..100%
+    case PK_TRIM: return p.v >= 200 ? 0x7FFFFF : (uint32_t)p.v * 0x400000 / 100;   // 100% = $400000 (as voiced)
+    case PK_GAIN: return q23(p.v / 200.0f);                                        // GAIN2 = gain / 2
+    case PK_RATIO: return q23(p.v / 200.0f);                                       // F2 = f / 2: 0.78 -> $31EB85
+    case PK_SEMI: return q23(0.5f / powf(2.0f, p.v / 12.0f));                      // INVP2 = 1 / (2p): -12 -> $7FFFFF
+  }
+  return 0;
+}
+
+static void paramText(const FxParam &p, char *s, size_t n) {
+  if (p.kind == PK_ENUM) snprintf(s, n, "%s", p.labels[p.v]);
+  else if (p.kind == PK_RATIO) snprintf(s, n, "X%d.%02d", p.v / 100, p.v % 100);
+  else if (p.kind == PK_SEMI) snprintf(s, n, "%+d ST", p.v);
+  else snprintf(s, n, "%d%%", p.v);
+}
+
+static int editCursor = 0;
+static int editFx() {               // FX1 if it has settings, else FX2 when it is in the chain
+  if (fxParams(menu.fx1).n) return menu.fx1;
+  if (menu.mode != 0 && fxParams(menu.fx2).n) return menu.fx2;
+  return menu.fx1;
+}
+
+static void editChange(int d) {
+  int fx = editFx();
+  FxParams ps = fxParams(fx);
+  if (!ps.n) return;
+  FxParam &p = ps.p[editCursor];
+  if (p.kind == PK_ENUM) p.v = wrapv(p.v - p.lo + d, p.hi - p.lo + 1) + p.lo;
+  else p.v = constrain(p.v + d * (p.kind == PK_SEMI ? 1 : (p.kind == PK_RATIO ? 2 : 5)), p.lo, p.hi);
+  uint16_t aa[2];
+  uint32_t w[2];
+  int n = 0;
+  if (fx == 8 && editCursor == 0) {                 // a voice preset sets THROAT + PITCH
+    if (p.v < 6) { formantP[1].v = VOICE_F[p.v]; formantP[2].v = VOICE_P[p.v]; }
+    aa[n] = formantP[1].addr; w[n++] = paramWord(formantP[1]);
+    aa[n] = formantP[2].addr; w[n++] = paramWord(formantP[2]);
+  } else {
+    if (fx == 8 && (editCursor == 1 || editCursor == 2)) formantP[0].v = 6;   // hand-tuned = CUSTOM
+    aa[n] = p.addr; w[n++] = paramWord(p);
+  }
+  bool ok = onceWriteXLong(aa, w, n);
+  displayStatus(ok ? "SENT TO DSP" : "DSP NOT ANSWERING", ok ? 0x30D060 : th::RED);
+}
+
+static void drawEdit(uint32_t now) {
+  backdrop();
+  int fx = editFx();
+  th::header(FX_NAMES[fx], now);
+  FxParams ps = fxParams(fx);
+  if (!ps.n) {
+    th::text(60, 50, "NO SETTINGS", th::p15(th::STEEL_L), 1, 'm');
+    th::text(60, 62, "FOR THIS EFFECT", th::p15(th::STEEL_L), 1, 'm');
+    statusOr("T1:FX T2:TUNE");
+    return;
+  }
+  char v[20];
+  for (int i = 0; i < ps.n; i++) {
+    paramText(ps.p[i], v, sizeof v);
+    th::row(26 + i * 16, ps.p[i].name, v, editCursor == i, false, now, th::slide(now, pageT0, i));
+  }
+  statusOr("KNOB:EDIT T6/B6:MOVE");
+}
+
+// Every effect's settings in one halt (after a boot, with the rest of the panel state)
+static bool pushParams() {
+  uint16_t aa[16];
+  uint32_t w[16];
+  int n = 0;
+  for (int fx = 7; fx <= 9; fx++) {
+    FxParams ps = fxParams(fx);
+    for (int i = 0; i < ps.n; i++)
+      if (ps.p[i].addr) { aa[n] = ps.p[i].addr; w[n++] = paramWord(ps.p[i]); }
+  }
+  return onceWriteXLong(aa, w, n);
+}
+
 // From controlsTick (every 50 ms): send when a pot moved more than 40 mV, at most every 100 ms (each send is one
 // short halt of the DSP, so they are kept rare)
 void potsToDsp(const int *mv) {
@@ -331,7 +442,7 @@ bool uiPushAll() {
   for (int k = 0; k < 3; k++) mv[k] = analogReadMilliVolts(PIN_POT[k]);
   memcpy(aa + 16, POT_AA, 4);
   potFill(mv, v + 16);
-  bool ok = onceWriteXMany(aa, v, 20);
+  bool ok = onceWriteXMany(aa, v, 20) && pushParams();
   if (ok) for (int k = 0; k < 3; k++) potSent[k] = mv[k];
   displayStatus(ok ? "PANEL -> DSP" : "DSP NOT ANSWERING", ok ? 0x30D060 : th::RED);
   return ok;
@@ -339,6 +450,7 @@ bool uiPushAll() {
 
 // Change the selected value by d (encoder steps or K_R1)
 static void uiChange(int d) {
+  if (uiPage == PAGE_EDIT) { editChange(d); uiShow(); return; }
   int c = menu.cursor;
   if (uiPage == PAGE_FX) {
     if (c == 0) { menu.mode = wrapv(menu.mode + d, N_MODES); send(0x20, menu.mode); }
@@ -356,6 +468,12 @@ static void uiChange(int d) {
 
 static void cursorMove(int d) {
   if (uiPage == PAGE_SYS) return;
+  if (uiPage == PAGE_EDIT) {
+    int n = fxParams(editFx()).n;
+    if (n) editCursor = wrapv(editCursor + d, n);
+    uiShow();
+    return;
+  }
   menu.cursor = wrapv(menu.cursor + d, 3);
   uiShow();
 }
@@ -375,6 +493,7 @@ void uiButton(int b) {
     case K_T1: uiPage = PAGE_FX; menu.cursor = 0; uiShow(); break;
     case K_T2: uiPage = PAGE_TUNE; menu.cursor = 0; uiShow(); break;
     case K_T3: uiPage = PAGE_SYS; uiShow(); break;
+    case K_T5: uiPage = PAGE_EDIT; editCursor = 0; uiShow(); break;
     case K_T6: cursorMove(-1); break;
     case K_B6: cursorMove(1); break;
     case K_R1: case K_B4: case K_B5:                         // ENTER (value +1; on SYSTEM: button test)
@@ -407,7 +526,7 @@ void uiTick() {
 // Serial keys (PC): '[' ']' cursor, '-' '=' value
 void menuKey(char k) {
   liveOn = true;
-  if (uiPage == PAGE_SYS || uiPage == PAGE_TEST) uiPage = PAGE_FX;
+  if (uiPage == PAGE_SYS || uiPage == PAGE_TEST || uiPage == PAGE_EDIT) uiPage = PAGE_FX;
   if (k == '[') cursorMove(-1);
   else if (k == ']') cursorMove(1);
   else if (k == '-') uiChange(-1);
