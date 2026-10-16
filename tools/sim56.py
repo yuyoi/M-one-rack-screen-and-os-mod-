@@ -102,6 +102,8 @@ class Sim:
         if a >= 0xFFFF80:
             if sp == 'X' and a == 0xFFFFA1:   # TX1
                 self.out.append(s24(v)); return
+            if sp == 'X' and a == 0xFFFFFC:   # OGDB: OnCE mailbox, read by the debugger over JTAG
+                self.ogdb = v; return
             raise SimError('peripheral write %s:%06X' % (sp, a))
         if sp == 'P': self.P[a] = v
         else: (self.X if sp == 'X' else self.Y)[a] = v

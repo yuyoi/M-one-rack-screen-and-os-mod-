@@ -113,6 +113,9 @@ right column. Press each once; turn the encoder to skip a dead one. The map is s
   yellow = latest, grey = not seen yet. The latest press shows its source (GPIO pin or ladder mV); a press that
   matches no learned button shows `??` in red. The page also shows the pots as bars and counts encoder steps.
   Press R2 twice to go back to the FX page. The idle face stays away while the test is on.
+- Idle face: 8 s without input and it takes over the screen; 60 s and it dozes. It **sings along with the output**:
+  the mouth opens with the level, loud parts close the eyes to ^ ^, and music notes float up. The level comes from
+  the kernel through the DSP's OnCE mailbox (OGDB), read over JTAG without halting the DSP, so no audio blips.
 - No input for 8 s: uwu. A minute: it sleeps. The first touch only wakes it.
 - PC keys still work: `mone.py COMx key ]=` (`[ ]` cursor, `- =` value, `F` FX page).
 

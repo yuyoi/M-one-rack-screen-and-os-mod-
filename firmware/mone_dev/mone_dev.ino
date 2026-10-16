@@ -379,6 +379,18 @@ bool waitDebug() {
   return false;
 }
 uint32_t onceRead(uint8_t cmd) { jDR(cmd, 8); return jDR(0, 24); }
+
+// The kernel's output envelope (dsp/os.py writes it to OGDB every frame). OnCE registers can be read while the core
+// runs (DSP56300FM ch. 7: "accessible even when the chip operates in Normal mode"), so this does NOT halt the DSP:
+// no audio blip, fine at the face's 25 fps.
+uint32_t dspLevel() {
+  if (!dspAwake) return 0;
+  jPinsUp();
+  jIR(IR_ENABLE_ONCE);
+  uint32_t v = onceRead(OC_READ_GDB);
+  jPinsDown();
+  return v & 0xFFFFFF;
+}
 bool exec1(uint32_t op) { jDR(OC_WRITE_PDB_GO, 8); jDR(op, 24); return waitDebug(); }
 bool exec2(uint32_t op, uint32_t ext) {
   jDR(OC_WRITE_PDB, 8); jDR(op, 24);
@@ -587,7 +599,7 @@ void loop() {
   if (!Serial.available()) return;
   char c = Serial.read();
   dspWatchHold = millis() + 10000;
-  if (c > ' ' && !strchr("iKEV[]-=FTU", c)) liveOn = false;  // a command owns the screen rows until 'i'
+  if (c > ' ' && !strchr("iKEV[]-=FTUA", c)) liveOn = false;  // a command owns the screen rows until 'i'
   switch (c) {
     case 't': case 'd': case 'n': case 'p': case 'r': case 'm': case 'w':  // J5 tools: retired, GPIO 5 is a pot now
       Serial.println("J5 tools retired (GPIO 5 = pot)"); break;
@@ -598,6 +610,7 @@ void loop() {
     case 'V': cmdValues(); Serial.printf("VALUES dsp-sense GPIO3 = %s\n", digitalRead(PIN_DSP_SENSE) ? "HIGH (on)" : "LOW (off)");
               Serial.printf("VALUES wifi %d dBm\n", WiFi.RSSI()); break;
     case 'T': testStart(); Serial.println("button test page (R2 twice on the panel = exit)"); break;
+    case 'A': Serial.printf("LEVEL %06lX\n", dspLevel()); break;   // output envelope (no halt)
     case 'U':
       if (uiPushAll()) Serial.printf("PUSHED mode=%d fx1=%d fx2=%d bypass=%d/%d\n", menu.mode, menu.fx1, menu.fx2, menu.byp1, menu.byp2);
       else Serial.println("PUSH failed: DSP not answering");

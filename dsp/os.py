@@ -6,6 +6,8 @@ Params (X short, written live by the ESP over J8):
   tune: X:$0B retune speed (Q23 per sample), X:$23-$2E snap map (signed semitones per pitch class, 0 = chromatic)
   output stage (the pots, after every mode): X:$2F dry gain, X:$3D wet gain (mix: the ESP sends 1-m and m),
     X:$3E tone k (one-pole low-pass, $7FFFFF = off), X:$3C volume; X:$3F = tone filter state
+  level: peak envelope of the output (X:$19, ~150 ms release) -> OGDB (X:$FFFFFC) every frame. OnCE registers can be
+    read over JTAG while the core runs, so the ESP's singing face reads it without halting the DSP.
 Effects are subroutines: input sample in X1, output in X1. Each keeps its own state:
   heavy $32-$33 | reverse $34-$37 + X:$020000-$02FFFF | comp $38-$39 | kernel $30-$31, $3A-$3B, $2F, $3C-$3F
   tune $00-$18, $23-$2E + X/Y:$0400-$07FF + X:$030000-$030FFF (load autotune.hex too: it lives at P:$400)
@@ -29,6 +31,9 @@ STEP = (2 << 23) // N
 FB, WET = 0x466666, 0x7FFFFF
 # comp
 T, DECAY, ATT, ONEMR, R = 0x0CCCCD, 0x7FF972, 0x7FDF3B, 0x7FFE5C, 0x0001A3
+# level envelope release: ~150 ms at 44.1 kHz frames
+import math  # noqa: E402
+ENV_DECAY = round(math.exp(-1 / (0.15 * 44100)) * 8388608)
 
 p = []; labels = {}; fix = []
 def w(*x): p.extend(x)
@@ -53,7 +58,7 @@ w(0x64F400, 0x020000, 0x200013)         # r4 = $020000 ; clr a
 w(0x57F400, 0x010000)                   # b = 65536
 L('clr')
 w(0x565C00, 0x01418C); jcc(0x0E2000, 'clr')   # clear the reverse buffer
-for a in (0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x38, 0x3A, 0x3B, 0x20, 0x22):
+for a in (0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x38, 0x3A, 0x3B, 0x20, 0x22, 0x19):
     w(0x560000 | (a << 8))              # move a,x:$aa  (0)
 w(0x57F400, STEP, 0x553700)             # reverse step d = +STEP
 w(0x56F400, 0x7FFFFF, 0x563900)         # comp g = 1.0
@@ -89,6 +94,12 @@ w(0x20A400, 0x46BD00, 0x2000D3)         # x0 = wet ; y0 = wet gain ; a += wet * 
 w(0x57BF00, 0x200014, 0x21C400)         # b = lp ; a -= lp ; x0 = a
 w(0x46BE00, 0x2000DB, 0x573F00)         # y0 = k ; b += k * x0 (one-pole low-pass) ; lp = b
 w(0x21E400, 0x46BC00, 0x2000D1, 0x21C500)  # x0 = b ; y0 = volume ; a = x0 * volume ; x1 = a
+w(0x20AE00, 0x200026)                   # level: a = |out|
+w(0x479900, 0x0141F8, ENV_DECAY)        # y1 = env ; b = env * decay
+w(0x20000D); jcc(0x0E1000, 'lvl_keep')  # cmp a,b ; jge (decayed env still above |out|)
+w(0x21CF00)                             # b = a  (new peak)
+L('lvl_keep')
+w(0x571900, 0x08CF3C)                   # env = b ; movep b,x:OGDB
 w(0x453100, 0x04C5C1)                   # x:$31 = out ; movep x1,x:TX1
 ext(0x0AF080, 'loop')
 L('left')

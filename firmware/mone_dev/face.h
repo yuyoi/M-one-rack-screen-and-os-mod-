@@ -2,9 +2,14 @@
 // No input for FACE_AFTER_MS -> the face replaces the live readout. It blinks, looks around, glances left when a pot
 // moves (the knobs sit left of the screen) and right for buttons/encoder. No input for SLEEP_AFTER_MS -> it dozes.
 // Any input wakes it (wide eyes toward the input for a moment), then the page comes back.
+// It SINGS along with the audio: the kernel's output envelope (read over JTAG without halting the DSP) opens the
+// mouth, loud parts close the eyes to ^ ^, the head lifts with the level and music notes float up. Sound keeps it
+// from dozing, but doesn't bring the menu back.
 // DSP off (dspWatch in the .ino: power switch out) -> asleep no matter what; backlight off after 5 min without input.
 // Never on the button test page.
 #pragma once
+
+uint32_t dspLevel();                       // .ino: output envelope from the kernel (OGDB), no halt
 
 const uint32_t FACE_AFTER_MS = 8000, SLEEP_AFTER_MS = 60000, SURPRISE_MS = 450;
 const int FACE_Y = 40, FACE_H = 160;       // sprite band on screen (keeps pushes short: ~30 ms at 20 MHz)
@@ -25,23 +30,71 @@ void faceBegin() {
   if (!faceReady) Serial.println("face: no RAM for sprite, face disabled");
 }
 
+// ---- Singing
+static float singLev = 0;                  // 0..1: -48 dBFS = mouth closed, -6 dBFS = wide open
+static uint32_t lastSoundMs = 0;           // last frame the output was audible
+struct FaceNote { float x, y; uint32_t t; bool on; };
+static FaceNote faceNotes[4];
+static uint32_t nextNote = 0;
+static int noteSide = 1;
+
+static void singTick(uint32_t now) {       // one JTAG read per frame (~2 ms, the DSP keeps running)
+  float target = 0;
+  if (dspAwake) {
+    uint32_t v = dspLevel();
+    float lin = (v & 0x800000) ? 0.0f : v / 8388608.0f;   // the envelope is |out|: never negative
+    float db = lin > 1e-6f ? 20.0f * log10f(lin) : -120.0f;
+    target = constrain((db + 48.0f) / 42.0f, 0.0f, 1.0f);
+  }
+  singLev = target > singLev ? target : singLev * 0.8f + target * 0.2f;   // opens at once, closes softly
+  if (singLev > 0.12f) lastSoundMs = now;
+}
+
+static void drawNote(int x, int y, uint32_t c) {          // an eighth note: head, stem, flag
+  faceSpr.fillEllipse(x, y, 5, 4, c);
+  faceSpr.fillRect(x + 3, y - 17, 2, 17, c);
+  faceSpr.fillTriangle(x + 5, y - 17, x + 12, y - 11, x + 5, y - 9, c);
+}
+
+static void notesTick(uint32_t now, bool singing, int mx, int my) {
+  if (singing && now > nextNote) {         // a new note from the side of the mouth
+    for (auto &n : faceNotes) if (!n.on) {
+      n = {(float)(mx + noteSide * 38), (float)(my + 4), now, true};
+      noteSide = -noteSide;
+      break;
+    }
+    nextNote = now + 450 + random(500) - (uint32_t)(singLev * 250);
+  }
+  for (auto &n : faceNotes) {
+    if (!n.on) continue;
+    float age = (now - n.t) / 1400.0f;     // rises ~60 px over 1.4 s with a little wiggle
+    if (age >= 1) { n.on = false; continue; }
+    int x = (int)(n.x + 6 * sinf(age * 9) + (n.x > 120 ? 20 : -20) * age), y = (int)(n.y - 62 * age);
+    drawNote(x, y, age < 0.7f ? C_BLUE : 0x1F5480);   // dims before it vanishes
+  }
+}
+
 static void faceDraw(uint32_t now) {
-  bool asleep = !dspAwake || now - lastActivity > SLEEP_AFTER_MS;
+  singTick(now);
+  bool asleep = !dspAwake || (now - lastActivity > SLEEP_AFTER_MS && now - lastSoundMs > 4000);
   if (asleep) lastAsleepMs = now;
   bool surprised = surpriseT && now - surpriseT < SURPRISE_MS;
+  bool singing = !asleep && !surprised && singLev > 0.12f;
+  bool belting = singing && singLev > 0.5f;
   // blink: the u's flatten to dashes for ~180 ms every few seconds
-  if (!asleep && !surprised && !blinking && now > nextBlink) { blinking = true; blinkStart = now; }
+  if (!asleep && !surprised && !belting && !blinking && now > nextBlink) { blinking = true; blinkStart = now; }
   if (blinking && now - blinkStart > 180) { blinking = false; nextBlink = now + 2500 + random(4000); }
   // gentle sway; surprise looks toward the input
   if (surprised) tgtX = actLook * 26;
   else if (now > nextLook) { tgtX = asleep ? 0 : random(-16, 17); nextLook = now + 1500 + random(2500); }
   lookX += (tgtX - lookX) * 0.2f;
-  int dx = (int)lookX, bob = asleep ? 0 : (int)(3 * sinf(now / 600.0f));
+  int dx = (int)lookX, bob = asleep ? 0 : (int)(3 * sinf(now / 600.0f)) - (singing ? (int)(singLev * 7) : 0);
 
   faceSpr.fillScreen(0);
-  for (int s = -1; s <= 1; s += 2) {      // eyes: "u" (open), "-" (blink / asleep), "o" (surprised)
+  for (int s = -1; s <= 1; s += 2) {      // eyes: "u" (open), "-" (blink / asleep), "o" (surprised), "^" (belting)
     int cx = 120 + s * 56 + dx, cy = 66 + bob;
     if (surprised) { faceSpr.fillCircle(cx, cy, 22, C_YEL); faceSpr.fillCircle(cx, cy, 13, 0); }
+    else if (belting) faceSpr.fillArc(cx, cy + 8, 22, 13, 180, 360, C_YEL);   // top half ring: happy closed eyes
     else if (blinking || asleep) faceSpr.fillRoundRect(cx - 22, cy + 4, 44, 8, 4, C_YEL);
     else {
       faceSpr.fillArc(cx, cy, 22, 13, 0, 180, C_YEL);          // bottom half ring
@@ -50,9 +103,17 @@ static void faceDraw(uint32_t now) {
     }
     faceSpr.fillEllipse(120 + s * 84 + dx / 2, 104 + bob, 12, 6, C_CHEEK);
   }
-  int mx = 120 + dx, my = 98 + bob;       // mouth: "w"
-  faceSpr.fillArc(mx - 8, my, 9, 5, 0, 180, C_YEL);
-  faceSpr.fillArc(mx + 8, my, 9, 5, 0, 180, C_YEL);
+  int mx = 120 + dx, my = 98 + bob;
+  if (singing) {                          // mouth: open "o", height follows the level, little tongue
+    int mh = 4 + (int)(singLev * 18), mw = 8 + (int)(singLev * 6), cy = my + 2 + mh;
+    faceSpr.fillEllipse(mx, cy, mw, mh, C_YEL);
+    faceSpr.fillEllipse(mx, cy, mw - 3, mh - 3, 0);
+    if (mh > 8) faceSpr.fillEllipse(mx, cy + mh - 6, mw / 2, 3, C_CHEEK);
+  } else {                                // mouth: "w"
+    faceSpr.fillArc(mx - 8, my, 9, 5, 0, 180, C_YEL);
+    faceSpr.fillArc(mx + 8, my, 9, 5, 0, 180, C_YEL);
+  }
+  notesTick(now, singing, mx, my);
   if (asleep) {
     faceSpr.setFont(&fonts::FreeSansBold12pt7b);
     faceSpr.setTextColor(C_BLUE);
