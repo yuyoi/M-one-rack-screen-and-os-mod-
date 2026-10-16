@@ -216,9 +216,7 @@ static void send(uint8_t aa, int v) {
 
 // Autotune params (dsp/autotune.py): X:$0B retune speed (Q23 per sample), X:$23-$2E snap map = signed semitone
 // offset per pitch class (C = 0) to the nearest note of the scale; ties snap down. Same rule as dsp/model/sim_os_tune.py.
-static void tuneSend() {
-  uint8_t aa[13];
-  uint32_t v[13];
+static void tuneFill(uint8_t *aa, uint32_t *v) {   // the 13 tune values: snap map $23-$2E, speed $0B
   bool allowed[12] = {false};
   for (int i = 0; i < SCALE_LEN[menu.scale]; i++) allowed[(menu.key + SCALE_STEPS[menu.scale][i]) % 12] = true;
   static const int TRY[5] = {0, -1, 1, -2, 2};
@@ -231,8 +229,25 @@ static void tuneSend() {
   // speed 0..10 -> 0.00005 .. 0.02 per sample, log-spaced (0 = very natural ~0.5 s glide, 10 = instant robot)
   aa[12] = 0x0B;
   v[12] = (uint32_t)lroundf(0.00005f * powf(400.0f, menu.speed / 10.0f) * 8388608.0f);
+}
+
+static void tuneSend() {
+  uint8_t aa[13];
+  uint32_t v[13];
+  tuneFill(aa, v);
   bool ok = onceWriteXMany(aa, v, 13);
   displayStatus(ok ? "tune sent to DSP" : "DSP not answering", ok ? C_GRN : C_RED);
+}
+
+// The whole panel state to the DSP in one halt: mode, FX1/FX2 (bypassed = CLEAN), tune. A freshly booted kernel starts
+// on its own defaults (SINGLE / HEAVY / REVERSE), so after every boot this makes the sound match the screen.
+bool uiPushAll() {
+  uint8_t aa[16] = {0x20, 0x21, 0x22};
+  uint32_t v[16] = {(uint32_t)menu.mode, (uint32_t)(menu.byp1 ? 0 : menu.fx1), (uint32_t)(menu.byp2 ? 0 : menu.fx2)};
+  tuneFill(aa + 3, v + 3);
+  bool ok = onceWriteXMany(aa, v, 16);
+  displayStatus(ok ? "panel state sent to DSP" : "DSP not answering", ok ? C_GRN : C_RED);
+  return ok;
 }
 
 // Change the selected value by d (encoder steps or K_R1)

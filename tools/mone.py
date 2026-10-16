@@ -114,6 +114,16 @@ def main():
                 raise SystemExit('%s: no answer from the ESP' % name)
         s.write(b'G%06X\n' % start)
         print(s.readline().decode(errors='replace').rstrip())
+        time.sleep(0.5)                      # the kernel clears its buffers, then sets its own defaults
+        s.write(b'U\n')                      # ESP sends its panel state (mode, FX, bypass, tune): sound = screen
+        end = time.time() + 10
+        while time.time() < end:
+            line = s.readline().decode(errors='replace').rstrip()
+            if line.startswith('PUSH'):
+                print(line)
+                break
+        else:
+            print('no answer to U (old ESP firmware?): the DSP runs its defaults, SINGLE / HEAVY')
         return
     if a[1] in ('load', 'go'):  # load file.hex (line1 = base hex, line2 = words) | go ADDR
         if a[1] == 'load':

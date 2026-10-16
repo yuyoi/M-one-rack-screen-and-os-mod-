@@ -582,7 +582,7 @@ void loop() {
   if (!Serial.available()) return;
   char c = Serial.read();
   dspWatchHold = millis() + 10000;
-  if (c > ' ' && !strchr("iKEV[]-=FT", c)) liveOn = false;  // a command owns the screen rows until 'i'
+  if (c > ' ' && !strchr("iKEV[]-=FTU", c)) liveOn = false;  // a command owns the screen rows until 'i'
   switch (c) {
     case 't': case 'd': case 'n': case 'p': case 'r': case 'm': case 'w':  // J5 tools: retired, GPIO 5 is a pot now
       Serial.println("J5 tools retired (GPIO 5 = pot)"); break;
@@ -593,6 +593,10 @@ void loop() {
     case 'V': cmdValues(); Serial.printf("VALUES dsp-sense GPIO3 = %s\n", digitalRead(PIN_DSP_SENSE) ? "HIGH (on)" : "LOW (off)");
               Serial.printf("VALUES wifi %d dBm\n", WiFi.RSSI()); break;
     case 'T': testStart(); Serial.println("button test page (R2 twice on the panel = exit)"); break;
+    case 'U':
+      if (uiPushAll()) Serial.printf("PUSHED mode=%d fx1=%d fx2=%d bypass=%d/%d\n", menu.mode, menu.fx1, menu.fx2, menu.byp1, menu.byp2);
+      else Serial.println("PUSH failed: DSP not answering");
+      break;
     case 'W': cmdWifi(); break;
     case 'E': encLog = !encLog; liveOn = true; Serial.println(encLog ? "enc log on" : "enc log off"); break;
     case 'q': cmdJtagProbe(); break;

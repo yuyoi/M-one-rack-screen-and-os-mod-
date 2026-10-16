@@ -86,6 +86,7 @@ python autotune.py                      # writes autotune.hex (P:$0400)
 python os.py                            # writes os.hex (P:$0A00, the kernel; calls into autotune)
 python codec_on.py                      # writes codec_on.hex (P:$0900): codec on + outputs unmuted, then the kernel
 python ../tools/mone.py COMx boot       # loads all three over J8, verifies, starts codec_on -> kernel
+                                        # then the ESP sends its panel state, so the sound matches the screen
 ```
 Effects: CLEAN, HEAVY, REVERSE, COMP, TUNE (autotune). Modes: SINGLE, DOUBLE (parallel), DBL-SINGLE (series).
 `python model/sim_os_tune.py 215` runs the whole OS in the simulator with FX 1 = TUNE (expect A3, within a few cents).
