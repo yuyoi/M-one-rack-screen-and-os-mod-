@@ -2,7 +2,8 @@
 
 Params (X short, written live by the ESP over J8):
   X:$20 mode   0 = SINGLE (FX1)   1 = DOUBLE (FX1 || FX2, mixed)   2 = DOUBLE-SINGLE (FX1 -> FX2)
-  X:$21 FX1    X:$22 FX2   effect ids: 0 clean, 1 heavy, 2 reverse, 3 comp, 4 tune (autotune.py at P:$400)
+  X:$21 FX1    X:$22 FX2   effect ids: 0 clean, 1 heavy, 2 reverse, 3 comp, 4 tune (autotune.py at P:$400),
+                           5 vox (vocal.py at P:$700: load vocal.hex too)
   tune: X:$0B retune speed (Q23 per sample), X:$23-$2E snap map (signed semitones per pitch class, 0 = chromatic)
   output stage (the pots, after every mode): X:$2F dry gain, X:$3D wet gain (mix: the ESP sends 1-m and m),
     X:$3E tone k (one-pole low-pass, $7FFFFF = off), X:$3C volume; X:$3F = tone filter state
@@ -10,7 +11,8 @@ Params (X short, written live by the ESP over J8):
     read over JTAG while the core runs, so the ESP's singing face reads it without halting the DSP.
 Effects are subroutines: input sample in X1, output in X1. Each keeps its own state:
   heavy $32-$33 | reverse $34-$37 + X:$020000-$02FFFF | comp $38-$39 | kernel $30-$31, $3A-$3B, $2F, $3C-$3F
-  tune $00-$18, $23-$2E + X/Y:$0400-$07FF + X:$030000-$030FFF (load autotune.hex too: it lives at P:$400)
+  tune $00-$18, $23-$2E + X/Y:$0400-$0885 + X:$030000-$030FFF (load autotune.hex too: it lives at P:$400)
+  vox $1A-$1F + X:$0100-$0113, Y:$0100-$0118 + X:$032000-$033FFF
 """
 import os
 import sys
@@ -21,6 +23,7 @@ from dis56k import listing  # noqa: E402
 sys.path.insert(0, HERE)
 import autotune  # noqa: E402  (assembles it: we only need its entry points)
 TUNE_INIT, FX_TUNE = autotune.a.labels['tune_init'], autotune.a.labels['fx_tune']
+import vocal  # noqa: E402  (vocal.py at P:$0700: VOX)
 
 BASE = 0xA00
 METER = 'meter' in sys.argv[1:]        # py os.py meter: histogram of idle spins per frame at X:$1100-$11FF
@@ -55,6 +58,7 @@ w(0x0500BB)                             # movec #0,sp   (fresh hardware stack: w
 for m in range(8):                      # m0..m7 linear (TC leaves m0 as a modulo register)
     w(0x05F420 | m, 0xFFFFFF)
 w(0x0BF080, TUNE_INIT)                  # jsr tune_init (clears its buffers, default speed, chromatic)
+w(0x0BF080, vocal.VOX_INIT)             # jsr vox_init (vocal.py: state, slap buffer, coefficients)
 w(0x64F400, 0x020000, 0x200013)         # r4 = $020000 ; clr a
 w(0x57F400, 0x010000)                   # b = 65536
 L('clr')
@@ -129,8 +133,9 @@ ext(0x0AF080, 'loop')
 
 # ---------------- effect table
 L('table')
-data('fx_clean'); data('fx_heavy'); data('fx_rev'); data('fx_comp'); data('fx_tune')
+data('fx_clean'); data('fx_heavy'); data('fx_rev'); data('fx_comp'); data('fx_tune'); data('fx_vox')
 labels['fx_tune'] = FX_TUNE
+labels['fx_vox'] = vocal.FX_VOX
 
 # ---------------- clean
 L('fx_clean')

@@ -56,7 +56,7 @@ One DSP program holds every effect as a subroutine (sample in X1, out in X1) plu
 
 Mode, FX1 and FX2 live at X:$20/$21/$22. The ESP's **FX page** (`firmware/mone_dev/menu.h`) changes them live over J8:
 it halts the DSP, saves X0, writes the param, restores X0 and resumes (a sub-millisecond blip). Effect ids: 0 clean,
-1 heavy, 2 reverse, 3 comp, 4 tune. Status: **on hardware.** `mone.py boot` starts it with the outputs un-muted
+1 heavy, 2 reverse, 3 comp, 4 tune, 5 vox (vocal chain, `dsp/vocal.py`). Status: **on hardware.** `mone.py boot` starts it with the outputs un-muted
 (test tone heard on the analog outs, kernel running), and the FX page switches effects live.
 
 ## Screen

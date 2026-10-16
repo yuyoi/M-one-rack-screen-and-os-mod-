@@ -15,10 +15,10 @@ enum { PAGE_FX, PAGE_TUNE, PAGE_SYS, PAGE_TEST };
 int uiPage = PAGE_FX;
 
 static const char *MODE_NAMES[] = {"SINGLE", "DOUBLE", "DBL-SINGLE"};
-static const char *FX_NAMES[] = {"CLEAN", "HEAVY", "REVERSE", "COMP", "TUNE"};
+static const char *FX_NAMES[] = {"CLEAN", "HEAVY", "REVERSE", "COMP", "TUNE", "VOX"};
 static const char *KEY_NAMES[] = {"C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"};
 static const char *SCALE_NAMES[] = {"CHROMATIC", "MAJOR", "MINOR"};
-static const int N_MODES = 3, N_FX = 5;
+static const int N_MODES = 3, N_FX = 6;
 static const uint8_t SCALE_STEPS[3][12] = {
   {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11},  // chromatic
   {0, 2, 4, 5, 7, 9, 11, 0, 0, 0, 0, 0},   // major (7 used)

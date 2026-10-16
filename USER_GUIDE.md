@@ -83,13 +83,21 @@ values, drives MUTE* (PB12) low and jumps to $0A00. On this board MUTE* works ba
 ```
 cd dsp
 python autotune.py                      # writes autotune.hex (P:$0400)
-python os.py                            # writes os.hex (P:$0A00, the kernel; calls into autotune)
+python vocal.py                         # writes vocal.hex (P:$0700): vocal effects (VOX)
+python os.py                            # writes os.hex (P:$0A00, the kernel; calls into autotune and vocal)
 python codec_on.py                      # writes codec_on.hex (P:$0900): codec on + outputs unmuted, then the kernel
-python ../tools/mone.py COMx boot       # loads all three over J8, verifies, starts codec_on -> kernel
+python ../tools/mone.py COMx boot       # loads all four over J8, verifies, starts codec_on -> kernel
                                         # then the ESP sends its panel state, so the sound matches the screen
 ```
-Effects: CLEAN, HEAVY, REVERSE, COMP, TUNE (autotune). Modes: SINGLE, DOUBLE (parallel), DBL-SINGLE (series).
+Effects: CLEAN, HEAVY, REVERSE, COMP, TUNE (autotune), VOX (vocal chain). Modes: SINGLE, DOUBLE (parallel),
+DBL-SINGLE (series).
 `python model/sim_os_tune.py 215` runs the whole OS in the simulator with FX 1 = TUNE (expect A3, within a few cents).
+`python model/sim_vox.py` does the same with FX 1 = VOX and compares it with `model/vox_model.py` (expect ~1e-7).
+
+**VOX** is a vocal chain voiced for a crystal/ceramic ham mic (D-104 style): HPF 80 Hz, +5 dB body at 180 Hz,
+-4 dB at 1 kHz (honk) and 3.5 kHz (crystal peak), a leveling compressor, light tube saturation, an exciter (the
+part above 3 kHz saturated and mixed back in, for clarity without boosting hiss) and a 110 ms slap. The constants
+are at the top of `dsp/model/vox_model.py`.
 
 ## The front panel
 First boot (or serial `K`): the screen asks for every button by position, T1-T6 top row, B1-B6 bottom row, R1/R2
