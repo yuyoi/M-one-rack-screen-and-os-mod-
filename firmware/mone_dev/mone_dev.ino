@@ -571,6 +571,23 @@ bool onceReadXMany(const uint8_t *aa, uint32_t *value, int n) {
   return true;
 }
 
+// Read X long addresses ($0040-$FFFF) in one halt, like onceReadXMany
+bool onceReadXLong(const uint16_t *aa, uint32_t *value, int n) {
+  if (!dspAwake) return false;
+  if (!enterDebug(false)) { jPinsDown(); return false; }
+  exec1(0x08C43C);                          // movep x0,x:OGDB
+  uint32_t savedX0 = onceRead(OC_READ_GDB);
+  for (int i = 0; i < n; i++) {
+    exec2(0x44F000, aa[i]);                 // move x:$aaaa,x0
+    exec1(0x08C43C);                        // movep x0,x:OGDB
+    value[i] = onceRead(OC_READ_GDB);
+  }
+  exec2(0x44F400, savedX0);                 // restore x0
+  resumeDebug();
+  jPinsDown();
+  return true;
+}
+
 // Live P-memory dump over OnCE: "P<start6hex><count6hex>\n". Saves/restores R0, resumes the DSP.
 // Frame: "MONEDUMP" u32 bytes, 3*count bytes (24-bit words, little-endian), u32 crc32.
 void cmdOnceMem(uint32_t readOp);
@@ -672,6 +689,9 @@ void loop() {
     case 'G': cmdGo(); break;
     case 'F': menuDraw(); break;
     case '[': case ']': case '-': case '=': menuKey(c); break;
+    case '#': liveOn = true; uiPage = PAGE_PRESET; presetLevel = 0; uiShow(); break;   // PRESET page
+    case '<': case '>':                                                    // previous / next preset (loads at rest)
+      liveOn = true; uiPage = PAGE_PRESET; presetLevel = 0; presetKnob(c == '>' ? 1 : -1); uiShow(); break;
     case 'M': displayToggleMode(); Serial.println("spi mode toggled"); break;
     case 'c':  // screen test: backlight blink + solid fills
       Serial.println("screen test");

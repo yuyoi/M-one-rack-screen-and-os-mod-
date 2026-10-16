@@ -2,9 +2,12 @@
 // Drawn with theme.h (PS1 heavy-metal look): every page renders itself into the 120x120 canvas from the current state,
 // and uiAnimTick redraws it ~9x a second (faster while the rows fly in) so the lava, flames and selection shimmer move.
 // Buttons by position (buttons.h):
-//   T1 = FX page   T2 = TUNE page   T3 = SYSTEM page (live inputs, WiFi)   T5 = EDIT (the effect's own settings)
+//   T1 = FX page   T2 = TUNE page   T3 = SYSTEM page (live inputs, WiFi)   T5 = EDIT (the effect's own settings;
+//   on the FX page's STRIP row: the STRIP input stage's settings)
 //   T6 / B6 = cursor up / down    encoder = change the selected value    R1 / B4 / B5 = enter (value +1)    R2 = back to FX
-//   B1 / B2 = bypass FX1 / FX2 (toggle, works on any page)
+//   T4 = PRESET page: the knob (or T6 / B6) loads the previous / next preset; enter = list by type; R2 = back
+//   B1 / B2 = bypass FX1 / FX2 (toggle, works on any page; a preset's chain: B1 bypasses it all)
+//   B3 = reverb FREEZE on / off (while REVERB plays)
 //   SYSTEM page + enter = BUTTON TEST page (every button only lights its box there; R2 twice = back to FX)
 // Serial keys from the PC do the same: '[' ']' cursor, '-' '=' value, 'F' FX page, 'T' button test.
 #pragma once
@@ -13,19 +16,29 @@ bool onceWriteX(uint8_t aa, uint32_t value);  // in the .ino
 bool onceWriteXMany(const uint8_t *aa, const uint32_t *value, int n);
 bool onceReadXMany(const uint8_t *aa, uint32_t *value, int n);
 bool onceWriteXLong(const uint16_t *aa, const uint32_t *value, int n);
+bool onceReadXLong(const uint16_t *aa, uint32_t *value, int n);
 
-enum { PAGE_FX, PAGE_TUNE, PAGE_SYS, PAGE_TEST, PAGE_EDIT };
+#include "presets.h"                        // generated: tools/gen_presets.py from dsp/presets.py
+
+enum { PAGE_FX, PAGE_TUNE, PAGE_SYS, PAGE_TEST, PAGE_EDIT, PAGE_PRESET };
 int uiPage = PAGE_FX;
 
-static const char *MODE_NAMES[] = {"SINGLE", "DOUBLE", "DBL-SINGLE"};
-static const char *FX_NAMES[] = {"CLEAN", "HEAVY", "REVERSE", "COMP", "TUNE", "VOX", "AMP", "RADIO", "FORMANT", "OCTAVE"};
-static const char *FX_SHORT[] = {"CLN", "HVY", "REV", "CMP", "TUNE", "VOX", "AMP", "RAD", "FMT", "OCT"};   // DOUBLE routing line
-static const bool FX_PEDAL[] = {false, true, true, true, false, false, true, false, false, false};   // PEDAL: mock pedal idle
+static const char *MODE_NAMES[] = {"SINGLE", "DOUBLE", "DBL-SINGLE", "CHAIN"};   // CHAIN (3): set by presets
+static const char *FX_NAMES[] = {"CLEAN", "HEAVY", "REVERSE", "COMP", "TUNE", "VOX", "AMP", "RADIO", "FORMANT", "OCTAVE",
+                                 "HARMONY", "DOUBLER", "REVERB", "DELAY", "SHIMMER", "SWELL", "GRAIN"};
+static const char *FX_SHORT[] = {"CLN", "HVY", "REV", "CMP", "TUNE", "VOX", "AMP", "RAD", "FMT", "OCT",
+                                 "HRM", "DBL", "RVB", "DLY", "SHM", "SWL", "GRN"};       // DOUBLE routing line
+static const bool FX_PEDAL[] = {false, true, true, true, false, false, true, false, false, false,
+                                false, false, false, false, false, false, false};         // PEDAL: mock pedal idle
+static const bool FX_SOON[] = {false, false, false, false, false, false, false, false, false, false,
+                               false, false, false, false, false, false, false};  // DSP placeholder (plays CLEAN): skipped
 static const uint32_t FX_COL[] = {0xFF7000, 0xFF7000, 0x963CDC, 0x2E8BFF, 0xFFCC00, 0xE6AA28, 0xE82010, 0xAA4614,
-                                  0xE82010, 0x963CDC};                                   // pedal colours
+                                  0xE82010, 0x963CDC, 0xFFCC00, 0xE6AA28, 0x2E8BFF, 0x30D060, 0xC8E6FF, 0xFFCC00,
+                                  0x963CDC};
 static const char *KEY_NAMES[] = {"C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"};
 static const char *SCALE_NAMES[] = {"CHROMATIC", "MAJOR", "MINOR"};
-static const int N_MODES = 3, N_FX = 10;
+static const int N_MODES = 3, N_FX = 17;
+static const int FX_STRIP = 99;             // the STRIP input stage's settings on the EDIT page (not an effect slot)
 static const uint8_t SCALE_STEPS[3][12] = {
   {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11},  // chromatic
   {0, 2, 4, 5, 7, 9, 11, 0, 0, 0, 0, 0},   // major (7 used)
@@ -36,11 +49,21 @@ static const int SCALE_LEN[3] = {12, 7, 7};
 struct MenuState {
   int mode = 0, fx1 = 0, fx2 = 2;  // boot state: CLEAN (HEAVY is +60 dB: a wall of noise on a live mic)
   bool byp1 = false, byp2 = false;
+  bool strip = false;              // STRIP input stage (X:$0207), runs before every mode
   int key = 0, scale = 0, speed = 6;  // speed 6 ~ the DSP default (0.002 per sample)
   int cursor = 0;                  // row on the FX / TUNE page
+  int preset = -1;                 // PRESETS index of the loaded preset, -1 = none (manual FX page setup)
+  int chainN = 0;                  // CHAIN mode (3): X:$0200 = n, X:$0201.. = effect ids
+  uint8_t chain[6] = {0};
 } menu;
+static bool presetDirty = false;   // a setting changed after the preset was loaded
 
 static int wrapv(int v, int n) { return ((v % n) + n) % n; }
+static int fxStep(int fx, int d) {           // next effect id, stepping over the DSP placeholders
+  fx = wrapv(fx + d, N_FX);
+  while (FX_SOON[fx]) fx = wrapv(fx + (d > 0 ? 1 : -1), N_FX);
+  return fx;
+}
 
 bool rowsVisible() { return liveOn && !faceOn && uiPage == PAGE_SYS && learnIdx < 0; }
 
@@ -156,22 +179,43 @@ static void drawFX(uint32_t now) {
   backdrop();
   th::header("FX", now, 0);
   char v[24];
-  th::row(28, "MODE", MODE_NAMES[menu.mode], menu.cursor == 0, false, now, th::slide(now, pageT0, 0));
-  snprintf(v, sizeof v, menu.byp1 ? "%s OFF" : "%s", FX_NAMES[menu.fx1]);
-  th::row(46, "FX 1", v, menu.cursor == 1, menu.byp1, now, th::slide(now, pageT0, 1));
-  snprintf(v, sizeof v, menu.byp2 ? "%s OFF" : "%s", FX_NAMES[menu.fx2]);
-  th::row(64, "FX 2", v, menu.cursor == 2, menu.mode == 0 || menu.byp2, now, th::slide(now, pageT0, 2));
+  bool ch = menu.mode == 3;                  // CHAIN (a preset): FX 1 / FX 2 are not used
+  snprintf(v, sizeof v, ch && menu.byp1 ? "CHAIN OFF" : "%s", MODE_NAMES[menu.mode]);
+  th::row(26, "MODE", v, menu.cursor == 0, false, now, th::slide(now, pageT0, 0));
+  snprintf(v, sizeof v, ch ? "IN CHAIN" : (menu.byp1 ? "%s OFF" : "%s"), FX_NAMES[menu.fx1]);
+  th::row(42, "FX 1", v, menu.cursor == 1, ch || menu.byp1, now, th::slide(now, pageT0, 1));
+  snprintf(v, sizeof v, ch ? "IN CHAIN" : (menu.byp2 ? "%s OFF" : "%s"), FX_NAMES[menu.fx2]);
+  th::row(58, "FX 2", v, menu.cursor == 2, ch || menu.mode == 0 || menu.byp2, now, th::slide(now, pageT0, 2));
+  th::row(74, "STRIP", menu.strip ? "ON" : "OFF", menu.cursor == 3, !menu.strip, now, th::slide(now, pageT0, 3));
   if (now - pageT0 > 250) {                  // routing line, once the rows have landed
-    char s[32];
+    char s[48];
     const char *a = menu.byp1 ? "-" : FX_NAMES[menu.fx1], *b = menu.byp2 ? "-" : FX_NAMES[menu.fx2];
-    if (menu.mode == 0) snprintf(s, sizeof s, "IN > %s > OUT", a);
+    const char *in = menu.strip ? "IN>STR" : "IN";
+    if (ch) {                                // the chain, on two lines when it is long
+      snprintf(s, sizeof s, "%s", in);
+      for (int i = 0; i < menu.chainN && !menu.byp1; i++) {
+        strlcat(s, ">", sizeof s);
+        strlcat(s, menu.chain[i] < N_FX ? FX_SHORT[menu.chain[i]] : "?", sizeof s);
+      }
+      strlcat(s, ">OUT", sizeof s);
+    } else if (menu.mode == 0) snprintf(s, sizeof s, menu.strip ? "%s>%s>OUT" : "%s > %s > OUT", in, a);
     else {
       a = menu.byp1 ? "-" : FX_SHORT[menu.fx1]; b = menu.byp2 ? "-" : FX_SHORT[menu.fx2];
-      snprintf(s, sizeof s, menu.mode == 1 ? "IN>%s+%s>OUT" : "IN>%s>%s>OUT", a, b);
+      snprintf(s, sizeof s, menu.mode == 1 ? "%s>%s+%s>OUT" : "%s>%s>%s>OUT", in, a, b);
     }
-    th::text(60, 89, s, th::p15(th::ORANGE), 1, 'm');
+    int len = strlen(s);
+    if (len <= 20) th::text(60, 93, s, th::p15(th::ORANGE), 1, 'm');
+    else {                                   // split at the '>' nearest the middle
+      int cut = len / 2;
+      while (cut > 0 && s[cut] != '>') cut--;
+      char s2[48];
+      snprintf(s2, sizeof s2, "%s", s + cut);
+      s[cut] = 0;
+      th::text(60, 89, s, th::p15(th::ORANGE), 1, 'm');
+      th::text(60, 98, s2, th::p15(th::ORANGE), 1, 'm');
+    }
   }
-  statusOr("KNOB:EDIT T6/B6:MOVE");
+  statusOr(menu.cursor == 3 ? "T5:STRIP SETTINGS" : "KNOB:EDIT T6/B6:MOVE");
 }
 
 static void drawTune(uint32_t now) {
@@ -219,6 +263,7 @@ static void drawSys(uint32_t now) {
 }
 
 static void drawEdit(uint32_t now);         // below, with the effect settings
+static void drawPreset(uint32_t now);       // below, with the presets
 
 void uiRedraw(uint32_t now) {
   if (!th::ready) return;
@@ -226,6 +271,7 @@ void uiRedraw(uint32_t now) {
   else if (uiPage == PAGE_TUNE) drawTune(now);
   else if (uiPage == PAGE_SYS) drawSys(now);
   else if (uiPage == PAGE_EDIT) drawEdit(now);
+  else if (uiPage == PAGE_PRESET) drawPreset(now);
   else drawTest(now);
   uint32_t t = millis();
   th::present();
@@ -242,7 +288,9 @@ void uiShow() {
 }
 
 // Call every loop: keeps the visible page animated
+void presetTick();
 void uiAnimTick() {
+  presetTick();                              // a preset picked with the knob loads once the knob rests
   if (!th::ready || !liveOn || faceOn || learnIdx >= 0) return;
   static uint32_t last = 0;
   uint32_t now = millis();
@@ -303,8 +351,14 @@ static void potFill(const int *mv, uint32_t *v) {
 }
 
 // ---- Effect settings: long X writes into each effect's param block (VOCAL_ARCH.md "Param maps"). T5 = EDIT page.
-enum { PK_ENUM, PK_PCT, PK_TRIM, PK_SEMI, PK_RATIO, PK_GAIN };
-struct FxParam { const char *name; uint16_t addr; uint8_t kind; int v, lo, hi; const char *const *labels; };
+// A row with addr 0 is a UI-only preset row (VOICE / TYPE): it sets the rows under it; hand-tuning those = CUSTOM.
+enum { PK_ENUM, PK_PCT, PK_TRIM, PK_SEMI, PK_RATIO, PK_GAIN, PK_INV, PK_TICKS, PK_INT, PK_HZ, PK_MS44, PK_HZ44,
+       PK_SHIFT, PK_DB, PK_RISE, PK_MK, PK_DRV, PK_SDB, PK_POW2 };
+static uint32_t q23s(double x) {             // signed Q23 (24-bit two's complement)
+  return (uint32_t)llround(constrain(x, -1.0, 0.99999988) * 8388608.0) & 0xFFFFFF;
+}
+struct FxParam { const char *name; uint16_t addr; uint8_t kind; int v, lo, hi; const char *const *labels; int step; };
+static const char *const OFF_ON[] = {"OFF", "ON"};
 static const char *const RADIO_MODES[] = {"TELEPHONE", "MEGAPHONE", "AM RADIO", "WALKIE", "CASSETTE", "VINYL"};
 static const char *const VOICES[] = {"GIANT", "MONSTER", "CHIPMUNK", "ELF", "M > F", "F > M", "CUSTOM"};
 static const int VOICE_F[6] = {78, 70, 135, 125, 118, 85};     // formant ratio x100
@@ -319,14 +373,149 @@ static FxParam formantP[] = {
 static FxParam octaveP[] = {
   {"PITCH", 0x0230, PK_SEMI, -12, -12, 12, nullptr}, {"THROAT", 0x0231, PK_RATIO, 100, 50, 160, nullptr},
   {"WET", 0x0232, PK_PCT, 50, 0, 100, nullptr}, {"GAIN", 0x0233, PK_GAIN, 141, 0, 200, nullptr}};
+// REVERB X:$0280 (dsp/model/reverb_model.py PRESETS): TYPE sets SIZE, DECAY, DAMP, PREDLY, WET
+static const char *const REV_TYPES[] = {"ROOM", "PLATE", "HALL", "CUSTOM"};
+static const int REV_PRE[3][5] = {{35, 45, 35, 5, 25}, {75, 65, 15, 12, 30}, {100, 82, 45, 35, 35}};
+static FxParam reverbP[] = {
+  {"TYPE", 0, PK_ENUM, 1, 0, 3, REV_TYPES},                     // UI only; the DSP boots on PLATE
+  {"SIZE", 0x0280, PK_PCT, 75, 10, 100, nullptr}, {"DECAY", 0x0281, PK_PCT, 65, 0, 95, nullptr},
+  {"DAMP", 0x0282, PK_INV, 15, 0, 95, nullptr}, {"PREDLY", 0x0284, PK_TICKS, 12, 1, 60, nullptr},
+  {"WET", 0x0285, PK_PCT, 30, 0, 100, nullptr}, {"FREEZE", 0x0286, PK_ENUM, 0, 0, 1, OFF_ON}};
+// DELAY X:$0290 (dsp/model/delay_model.py PRESETS): TYPE sets every row
+static const char *const DLY_TYPES[] = {"SLAP", "TEMPO", "DOTTED", "DUCKING", "TAPE", "MULTI", "CUSTOM"};
+static const int DLY_PRE[6][9] = {   // time ms, feedback, wet, tone, duck (%), taps, wow (ticks), sat, wow rate (Hz x10)
+  {110, 0, 35, 70, 0, 0, 0, 0, 7}, {500, 35, 30, 50, 0, 0, 0, 0, 7}, {375, 40, 30, 50, 0, 0, 0, 0, 7},
+  {500, 35, 40, 50, 80, 0, 0, 0, 7}, {500, 80, 35, 35, 0, 0, 6, 1, 7}, {720, 30, 35, 45, 0, 1, 0, 0, 7}};
+static FxParam delayP[] = {
+  {"TYPE", 0, PK_ENUM, 0, 0, 6, DLY_TYPES},                     // UI only; the DSP boots on SLAP
+  {"TIME", 0x0290, PK_TICKS, 110, 10, 725, nullptr, 5}, {"FDBK", 0x0291, PK_PCT, 0, 0, 95, nullptr},
+  {"WET", 0x0292, PK_PCT, 35, 0, 100, nullptr}, {"TONE", 0x0293, PK_PCT, 70, 5, 100, nullptr},
+  {"DUCK", 0x0294, PK_PCT, 0, 0, 100, nullptr}, {"TAPS", 0x0295, PK_ENUM, 0, 0, 1, OFF_ON},
+  {"WOW", 0x0296, PK_INT, 0, 0, 20, nullptr}, {"SAT", 0x0297, PK_ENUM, 0, 0, 1, OFF_ON},
+  {"WOW HZ", 0x0298, PK_HZ, 7, 1, 50, nullptr}};
+// HARMONY X:$0240 (dsp/model/harmony_model.py): +0 MIX1, +1 MIX2, +2 DRY, +4 MAP1, +16 MAP2 (12 signed semitone offsets
+// per pitch class of TUNE's note). A voice is a diatonic interval in the TUNE page's key / scale (chromatic = major),
+// as diatonic_map(steps, key), or a fixed interval (the same offset for all 12).
+static const char *const HARM_IV[] = {"3RD UP", "4TH UP", "5TH UP", "6TH UP", "OCT UP", "3RD DN", "4TH DN", "5TH DN",
+                                      "6TH DN", "OCT DN", "+4 ST", "+5 ST", "+7 ST", "-5 ST", "-7 ST", "+19 ST"};
+static const int8_t HARM_DEF[16][2] = {{1, 2}, {1, 3}, {1, 4}, {1, 5}, {1, 7}, {1, -2}, {1, -3}, {1, -4}, {1, -5},
+                                       {1, -7}, {0, 4}, {0, 5}, {0, 7}, {0, -5}, {0, -7}, {0, 19}};   // {diatonic, steps / ST}
+static FxParam harmonyP[] = {
+  {"VOICE 1", 0, PK_ENUM, 0, 0, 15, HARM_IV}, {"VOICE 2", 0, PK_ENUM, 2, 0, 15, HARM_IV},   // maps, not preset rows
+  {"MIX 1", 0x0240, PK_PCT, 50, 0, 100, nullptr}, {"MIX 2", 0x0241, PK_PCT, 50, 0, 100, nullptr},
+  {"DRY", 0x0242, PK_PCT, 80, 0, 100, nullptr}};
+// DOUBLER X:$0260: +0 D1, +1 D2 (samples), +2 DEPTH (samples), +3 KW (LFO rate), +4 WET (= doubler_params defaults)
+static FxParam doublerP[] = {
+  {"TIME 1", 0x0260, PK_MS44, 18, 5, 40, nullptr}, {"TIME 2", 0x0261, PK_MS44, 27, 5, 40, nullptr},
+  {"DEPTH", 0x0262, PK_INT, 12, 0, 30, nullptr}, {"RATE", 0x0263, PK_HZ44, 35, 5, 300, nullptr, 5},
+  {"WET", 0x0264, PK_PCT, 60, 0, 100, nullptr}};
+// SHIMMER X:$02A0 (harmony_model.shimmer_params): +0 GAIN, +1 INC (shifter step); it goes right before REVERB
+static FxParam shimmerP[] = {
+  {"GAIN", 0x02A0, PK_PCT, 35, 0, 60, nullptr}, {"PITCH", 0x02A1, PK_SHIFT, 12, -12, 24, nullptr}};
+// SWELL X:$02B0 (strip_model.swell_params): +0 THR (level), +1 RATE (1 / fade-in samples)
+static FxParam swellP[] = {
+  {"THRESH", 0x02B0, PK_DB, -42, -70, -20, nullptr}, {"TIME", 0x02B1, PK_RISE, 450, 50, 3000, nullptr, 25}};
+// STRIP input stage X:$0270 (strip_model.strip_params; on / off = X:$0207, the FX page's STRIP row): gate, de-esser,
+// leveler, makeup, drive, then one EQ biquad (+5..+9: b0/2 b1/2 b2/2 -a1/2 -a2/2) built here from EQ + EQ GAIN
+static const char *const EQ_TYPES[] = {"FLAT", "PRESENCE", "AIR", "LOW"};
+static FxParam stripP[] = {
+  {"GATE", 0x0270, PK_DB, -50, -80, -20, nullptr}, {"DE-ESS", 0x0271, PK_DB, -18, -40, 0, nullptr},
+  {"COMP", 0x0272, PK_DB, -12, -40, 0, nullptr}, {"MAKEUP", 0x0273, PK_MK, 150, 100, 400, nullptr, 10},
+  {"DRIVE", 0x0274, PK_DRV, 0, 0, 100, nullptr}, {"EQ", 0, PK_ENUM, 0, 0, 3, EQ_TYPES},   // drive x10
+  {"EQ GAIN", 0, PK_SDB, 3, -10, 10, nullptr}};          // +-10 dB: a 10 kHz shelf at +12 overflows the /2 format
+// GRAIN X:$02C0 (grain_model.params): +0 DPH = 1/L (follows SIZE), +1 L (samples), +2 RANGE (mask 2^n - 1, n = 11..15),
+// +3 SCATTER, +4 WET, +5 DRY. 2L + RANGE stays inside REVERSE's 64K ring, so SIZE stops at 300 ms.
+static const char *const GRAIN_RANGE[] = {"46 MS", "93 MS", "186 MS", "372 MS", "743 MS"};
+static FxParam grainP[] = {
+  {"SIZE", 0x02C1, PK_MS44, 110, 20, 300, nullptr, 5}, {"RANGE", 0x02C2, PK_POW2, 4, 0, 4, GRAIN_RANGE},
+  {"SCATTER", 0x02C3, PK_ENUM, 1, 0, 1, OFF_ON}, {"WET", 0x02C4, PK_PCT, 80, 0, 100, nullptr},
+  {"DRY", 0x02C5, PK_PCT, 40, 0, 100, nullptr}};
+static uint32_t grainDph() { return q23(1.0f / (grainP[0].v * 441 / 10)); }   // 1 / L
 struct FxParams { FxParam *p; int n; };
 
 static FxParams fxParams(int fx) {
   if (fx == 7) return {radioP, 4};
   if (fx == 8) return {formantP, 5};
   if (fx == 9) return {octaveP, 4};
+  if (fx == 10) return {harmonyP, 5};
+  if (fx == 11) return {doublerP, 5};
+  if (fx == 12) return {reverbP, 7};
+  if (fx == 13) return {delayP, 10};
+  if (fx == 14) return {shimmerP, 2};
+  if (fx == 15) return {swellP, 2};
+  if (fx == 16) return {grainP, 5};
+  if (fx == FX_STRIP) return {stripP, 7};
   return {nullptr, 0};
 }
+
+// STRIP EQ -> X:$0275-$0279, as strip_model.eq_coefs: PRESENCE = RBJ peak 4 kHz Q 0.7, AIR / LOW = shelves at
+// 10 kHz / 150 Hz (strip_model.shelf); FLAT or 0 dB = b0 1, the rest 0
+static int stripEqFill(uint16_t *aa, uint32_t *w, int n) {
+  int t = stripP[5].v, g = stripP[6].v;
+  double c[5] = {1, 0, 0, 0, 0};                         // b0 b1 b2 a1 a2, normalized
+  if (t && g) {
+    static const double F[4] = {0, 4000, 10000, 150};
+    double A = pow(10.0, g / 40.0), wv = 2 * PI * F[t] / 44100.0, cs = cos(wv), sn = sin(wv);
+    double b0, b1, b2, a0, a1, a2;
+    if (t == 1) {
+      double al = sn / (2 * 0.7);
+      b0 = 1 + al * A; b1 = -2 * cs; b2 = 1 - al * A; a0 = 1 + al / A; a1 = -2 * cs; a2 = 1 - al / A;
+    } else {
+      double sa = 2 * sqrt(A) * (sn / 2 * sqrt(2.0));
+      if (t == 2) {
+        b0 = A * ((A + 1) + (A - 1) * cs + sa); b1 = -2 * A * ((A - 1) + (A + 1) * cs); b2 = A * ((A + 1) + (A - 1) * cs - sa);
+        a0 = (A + 1) - (A - 1) * cs + sa; a1 = 2 * ((A - 1) - (A + 1) * cs); a2 = (A + 1) - (A - 1) * cs - sa;
+      } else {
+        b0 = A * ((A + 1) - (A - 1) * cs + sa); b1 = 2 * A * ((A - 1) - (A + 1) * cs); b2 = A * ((A + 1) - (A - 1) * cs - sa);
+        a0 = (A + 1) + (A - 1) * cs + sa; a1 = -2 * ((A - 1) + (A + 1) * cs); a2 = (A + 1) + (A - 1) * cs - sa;
+      }
+    }
+    c[0] = b0 / a0; c[1] = b1 / a0; c[2] = b2 / a0; c[3] = a1 / a0; c[4] = a2 / a0;
+  }
+  for (int i = 0; i < 5; i++) { aa[n] = 0x0275 + i; w[n++] = q23s(c[i] * (i < 3 ? 0.5 : -0.5)); }
+  return n;
+}
+
+static bool fxInPath(int fx) {
+  if (menu.mode == 3) {                      // CHAIN: in the list (B1 bypasses the whole chain)
+    for (int i = 0; i < menu.chainN; i++) if (menu.chain[i] == fx) return !menu.byp1;
+    return false;
+  }
+  return (menu.fx1 == fx && !menu.byp1) || (menu.mode != 0 && menu.fx2 == fx && !menu.byp2);
+}
+
+// HARMONY voice v -> its 12-word map at X:$0244 / $0250 (harmony_model.diatonic_map: nearest scale degree at or below)
+static int harmMapFill(int v, uint16_t *aa, uint32_t *w, int n) {
+  const int8_t *iv = HARM_DEF[harmonyP[v].v];
+  const uint8_t *sc = SCALE_STEPS[menu.scale == 2 ? 2 : 1];
+  for (int pc = 0; pc < 12; pc++) {
+    int off = iv[1];
+    if (iv[0]) {
+      int rel = (pc - menu.key + 12) % 12, deg = 0, best = 99;
+      for (int d = 0; d < 7; d++) { int dist = (rel - sc[d] + 12) % 12; if (dist < best) { best = dist; deg = d; } }
+      int k = deg + iv[1], oct = k >= 0 ? k / 7 : -((6 - k) / 7);                     // floor(k / 7)
+      off = sc[((k % 7) + 7) % 7] + 12 * oct - sc[deg];
+    }
+    aa[n] = 0x0244 + 12 * v + pc;
+    w[n++] = (uint32_t)off & 0xFFFFFF;
+  }
+  return n;
+}
+
+static void harmSend() {                     // both maps, e.g. after a key / scale change
+  uint16_t aa[24];
+  uint32_t w[24];
+  int n = harmMapFill(1, aa, w, harmMapFill(0, aa, w, 0));
+  onceWriteXLong(aa, w, n);
+}
+
+static int presetSpan(int fx) { return fx == 8 ? 2 : fx == 12 ? 5 : fx == 13 ? 9 : 0; }   // rows the preset row sets
+static void presetRows(int fx, int pr) {
+  if (fx == 8) { formantP[1].v = VOICE_F[pr]; formantP[2].v = VOICE_P[pr]; }
+  if (fx == 12) for (int i = 0; i < 5; i++) reverbP[1 + i].v = REV_PRE[pr][i];
+  if (fx == 13) for (int i = 0; i < 9; i++) delayP[1 + i].v = DLY_PRE[pr][i];
+}
+static uint32_t revDd2() { return q23(constrain(reverbP[2].v / 100.0f + 0.15f, 0.25f, 0.5f)); }   // DD2 follows DECAY
 
 static uint32_t paramWord(const FxParam &p) {
   switch (p.kind) {
@@ -336,19 +525,49 @@ static uint32_t paramWord(const FxParam &p) {
     case PK_GAIN: return q23(p.v / 200.0f);                                        // GAIN2 = gain / 2
     case PK_RATIO: return q23(p.v / 200.0f);                                       // F2 = f / 2: 0.78 -> $31EB85
     case PK_SEMI: return q23(0.5f / powf(2.0f, p.v / 12.0f));                      // INVP2 = 1 / (2p): -12 -> $7FFFFF
+    case PK_INV: return q23(1.0f - p.v / 100.0f);                                  // reverb KD = 1 - damping
+    case PK_TICKS: return (uint32_t)((p.v * 2205 + 50) / 100);                     // ms -> ticks at 22.05 kHz
+    case PK_INT: return (uint32_t)p.v;
+    case PK_HZ: return q23(2.0f * PI * p.v / 10.0f / 22050.0f);                    // LFO step per tick
+    case PK_MS44: return (uint32_t)(p.v * 441 / 10);                                // ms -> samples (truncated)
+    case PK_POW2: return (1u << (11 + p.v)) - 1;                                     // GRAIN RANGE mask
+    case PK_HZ44: return q23(2.0f * PI * p.v / 100.0f / 44100.0f);                 // LFO step per sample
+    case PK_SHIFT: return q23s((powf(2.0f, p.v / 12.0f) - 1.0f) / 2048.0f);        // shifter step (harmony INCTAB)
+    case PK_DB: return q23(powf(10.0f, p.v / 20.0f));                              // dBFS -> level
+    case PK_RISE: return q23(1.0f / (p.v * 44.1f));                                // fade-in ms -> step per sample
+    case PK_MK: return q23(p.v / 400.0f);                                          // makeup / 4
+    case PK_DRV: return q23(p.v / 160.0f);                                         // drive / 16 (0 = off), v = x10
+    case PK_SDB: return 0;                                                         // shown only (the EQ rows)
   }
   return 0;
 }
 
 static void paramText(const FxParam &p, char *s, size_t n) {
-  if (p.kind == PK_ENUM) snprintf(s, n, "%s", p.labels[p.v]);
+  if (p.kind == PK_ENUM || p.kind == PK_POW2) snprintf(s, n, "%s", p.labels[p.v]);
   else if (p.kind == PK_RATIO) snprintf(s, n, "X%d.%02d", p.v / 100, p.v % 100);
-  else if (p.kind == PK_SEMI) snprintf(s, n, "%+d ST", p.v);
+  else if (p.kind == PK_SEMI || p.kind == PK_SHIFT) snprintf(s, n, "%+d ST", p.v);
+  else if (p.kind == PK_DB) snprintf(s, n, "%d DB", p.v);
+  else if (p.kind == PK_SDB) snprintf(s, n, "%+d DB", p.v);
+  else if (p.kind == PK_RISE) snprintf(s, n, "%d MS", p.v);
+  else if (p.kind == PK_MK) snprintf(s, n, "X%d.%02d", p.v / 100, p.v % 100);
+  else if (p.kind == PK_DRV) { if (p.v) snprintf(s, n, "X%d.%d", p.v / 10, p.v % 10); else snprintf(s, n, "OFF"); }
+  else if (p.kind == PK_TICKS || p.kind == PK_MS44) snprintf(s, n, "%d MS", p.v);
+  else if (p.kind == PK_HZ44) snprintf(s, n, "%d.%02d HZ", p.v / 100, p.v % 100);
+  else if (p.kind == PK_INT) snprintf(s, n, "%d", p.v);
+  else if (p.kind == PK_HZ) snprintf(s, n, "%d.%d HZ", p.v / 10, p.v % 10);
   else snprintf(s, n, "%d%%", p.v);
 }
 
+static int paramStep(const FxParam &p) {          // per encoder step
+  if (p.step) return p.step;
+  if (p.kind == PK_RATIO) return 2;
+  return (p.kind == PK_PCT || p.kind == PK_TRIM || p.kind == PK_GAIN || p.kind == PK_INV) ? 5 : 1;
+}
+
 static int editCursor = 0;
-static int editFx() {               // FX1 if it has settings, else FX2 when it is in the chain
+static bool editStrip = false;      // T5 pressed on the FX page's STRIP row
+static int editFx() {               // STRIP, else FX1 if it has settings, else FX2 when it is in the chain
+  if (editStrip) return FX_STRIP;
   if (fxParams(menu.fx1).n) return menu.fx1;
   if (menu.mode != 0 && fxParams(menu.fx2).n) return menu.fx2;
   return menu.fx1;
@@ -360,18 +579,20 @@ static void editChange(int d) {
   if (!ps.n) return;
   FxParam &p = ps.p[editCursor];
   if (p.kind == PK_ENUM) p.v = wrapv(p.v - p.lo + d, p.hi - p.lo + 1) + p.lo;
-  else p.v = constrain(p.v + d * (p.kind == PK_SEMI ? 1 : (p.kind == PK_RATIO ? 2 : 5)), p.lo, p.hi);
-  uint16_t aa[2];
-  uint32_t w[2];
+  else p.v = constrain(p.v + d * paramStep(p), p.lo, p.hi);
+  int span = presetSpan(fx);
+  bool preset = span && editCursor == 0;
+  if (preset && p.v < p.hi) presetRows(fx, p.v);                // VOICE / TYPE sets the rows under it
+  if (span && !preset && editCursor <= span) ps.p[0].v = ps.p[0].hi;   // hand-tuned = CUSTOM
+  uint16_t aa[16];
+  uint32_t w[16];
   int n = 0;
-  if (fx == 8 && editCursor == 0) {                 // a voice preset sets THROAT + PITCH
-    if (p.v < 6) { formantP[1].v = VOICE_F[p.v]; formantP[2].v = VOICE_P[p.v]; }
-    aa[n] = formantP[1].addr; w[n++] = paramWord(formantP[1]);
-    aa[n] = formantP[2].addr; w[n++] = paramWord(formantP[2]);
-  } else {
-    if (fx == 8 && (editCursor == 1 || editCursor == 2)) formantP[0].v = 6;   // hand-tuned = CUSTOM
-    aa[n] = p.addr; w[n++] = paramWord(p);
-  }
+  for (int i = preset ? 1 : editCursor; i <= (preset ? span : editCursor); i++)
+    if (ps.p[i].addr) { aa[n] = ps.p[i].addr; w[n++] = paramWord(ps.p[i]); }
+  if (fx == 10 && editCursor < 2) n = harmMapFill(editCursor, aa, w, n);   // VOICE 1 / 2: that voice's map
+  if (fx == FX_STRIP && editCursor >= 5) n = stripEqFill(aa, w, n);        // EQ / EQ GAIN: the biquad
+  if (fx == 16 && editCursor == 0) { aa[n] = 0x02C0; w[n++] = grainDph(); } // SIZE: DPH = 1 / L too
+  if (fx == 12) { aa[n] = 0x0287; w[n++] = revDd2(); }
   bool ok = onceWriteXLong(aa, w, n);
   displayStatus(ok ? "SENT TO DSP" : "DSP NOT ANSWERING", ok ? 0x30D060 : th::RED);
 }
@@ -379,7 +600,7 @@ static void editChange(int d) {
 static void drawEdit(uint32_t now) {
   backdrop();
   int fx = editFx();
-  th::header(FX_NAMES[fx], now);
+  th::header(fx == FX_STRIP ? "STRIP" : FX_NAMES[fx], now);
   FxParams ps = fxParams(fx);
   if (!ps.n) {
     th::text(60, 50, "NO SETTINGS", th::p15(th::STEEL_L), 1, 'm');
@@ -388,23 +609,41 @@ static void drawEdit(uint32_t now) {
     return;
   }
   char v[20];
-  for (int i = 0; i < ps.n; i++) {
+  const int ROWS = 5;                                     // rows that fit above the status bar; the list scrolls
+  int first = constrain(editCursor - 2, 0, max(0, ps.n - ROWS));
+  for (int i = first; i < ps.n && i < first + ROWS; i++) {
     paramText(ps.p[i], v, sizeof v);
-    th::row(26 + i * 16, ps.p[i].name, v, editCursor == i, false, now, th::slide(now, pageT0, i));
+    th::row(26 + (i - first) * 16, ps.p[i].name, v, editCursor == i, false, now, th::slide(now, pageT0, i - first));
   }
-  statusOr("KNOB:EDIT T6/B6:MOVE");
+  uint32_t ac = th::p15(th::YELLOW);                      // more rows above / below
+  if (first > 0) th::cv.fillTriangle(117, 27, 119, 27, 118, 24, ac);
+  if (first + ROWS < ps.n) th::cv.fillTriangle(117, 101, 119, 101, 118, 104, ac);
+  if (fx == 10) {                                         // HARMONY: its voices follow the TUNE page's key
+    snprintf(v, sizeof v, "KEY %s %s (T2)", KEY_NAMES[menu.key], menu.scale == 2 ? "MINOR" : "MAJOR");
+    statusOr(v);
+  } else statusOr("KNOB:EDIT T6/B6:MOVE");
 }
 
 // Every effect's settings in one halt (after a boot, with the rest of the panel state)
 static bool pushParams() {
-  uint16_t aa[16];
-  uint32_t w[16];
+  uint16_t aa[112];
+  uint32_t w[112];
   int n = 0;
-  for (int fx = 7; fx <= 9; fx++) {
-    FxParams ps = fxParams(fx);
+  if (menu.mode == 3) {                                   // CHAIN: the list
+    aa[n] = 0x0200; w[n++] = menu.chainN;
+    for (int i = 0; i < 6; i++) { aa[n] = 0x0201 + i; w[n++] = menu.chain[i]; }
+  }
+  for (int fx = 7; fx <= N_FX; fx++) {
+    FxParams ps = fxParams(fx < N_FX ? fx : FX_STRIP);
     for (int i = 0; i < ps.n; i++)
       if (ps.p[i].addr) { aa[n] = ps.p[i].addr; w[n++] = paramWord(ps.p[i]); }
   }
+  n = harmMapFill(1, aa, w, harmMapFill(0, aa, w, n));    // HARMONY maps (key from the TUNE page)
+  n = stripEqFill(aa, w, n);
+  aa[n] = 0x0283; w[n++] = q23(0.9995f);                  // reverb bandwidth (fixed, as reverb_model.params)
+  aa[n] = 0x0287; w[n++] = revDd2();
+  aa[n] = 0x02C0; w[n++] = grainDph();
+  aa[n] = 0x0207; w[n++] = menu.strip;                    // STRIP on / off
   return onceWriteXLong(aa, w, n);
 }
 
@@ -421,28 +660,292 @@ void potsToDsp(const int *mv) {
   if (onceWriteXMany(POT_AA, v, 4)) for (int k = 0; k < 3; k++) potSent[k] = mv[k];
 }
 
+// ---- Presets (presets.h; T4 = PRESET page): CHAIN mode + the preset's writes, all in one halt. TUNE's snap map and
+// HARMONY's maps are recomputed for the TUNE page's key; the EDIT pages are set from the writes (screen = sound).
+static int s24(uint32_t v) { return (int32_t)(v << 8) >> 8; }
+
+static void paramDecode(uint16_t a, uint32_t v) {     // a written word -> the EDIT row that writes it (nearest value)
+  for (int fx = 7; fx <= N_FX; fx++) {
+    FxParams ps = fxParams(fx < N_FX ? fx : FX_STRIP);
+    for (int i = 0; i < ps.n; i++) {
+      FxParam &p = ps.p[i];
+      if (!p.addr || p.addr != a) continue;
+      int best = p.v, bd = 0x7FFFFFFF;
+      for (int c = p.lo; c <= p.hi && bd; c++) {
+        p.v = c;
+        int d = abs(s24(paramWord(p)) - s24(v));
+        if (d < bd) { bd = d; best = c; }
+      }
+      p.v = best;
+      return;
+    }
+  }
+}
+
+static void stripEqDecode(const uint32_t *eq) {       // the 5 EQ words -> EQ + EQ GAIN (nearest)
+  int g0 = stripP[6].v, bt = 0, bg = g0, bd = 0x7FFFFFFF;
+  uint16_t aa[5];
+  uint32_t w[5];
+  for (int t = 0; t < 4 && bd; t++)
+    for (int g = t ? -10 : g0; g <= (t ? 10 : g0) && bd; g++) {
+      if (t && !g) continue;
+      stripP[5].v = t; stripP[6].v = g;
+      stripEqFill(aa, w, 0);
+      int d = 0;
+      for (int i = 0; i < 5; i++) d += abs(s24(w[i]) - s24(eq[i]));
+      if (d < bd) { bd = d; bt = t; bg = g; }
+    }
+  stripP[5].v = bt; stripP[6].v = bg;
+}
+
+static void presetMatch(int fx) {                     // VOICE / TYPE row: the preset its rows match, else CUSTOM
+  FxParams ps = fxParams(fx);
+  int span = presetSpan(fx), saved[10];
+  for (int i = 1; i <= span; i++) saved[i - 1] = ps.p[i].v;
+  for (int pr = 0; pr < ps.p[0].hi; pr++) {
+    presetRows(fx, pr);
+    bool same = true;
+    for (int i = 1; i <= span; i++) same = same && ps.p[i].v == saved[i - 1];
+    if (same) { ps.p[0].v = pr; return; }
+  }
+  for (int i = 1; i <= span; i++) ps.p[i].v = saved[i - 1];
+  ps.p[0].v = ps.p[0].hi;
+}
+
+static void presetDecode(int i) {                     // the panel state of preset i (no DSP writes)
+  const PresetDef &p = PRESETS[i];
+  menu.mode = 3;
+  menu.byp1 = false;
+  menu.chainN = p.chainN;
+  memcpy(menu.chain, p.chain, 6);
+  uint32_t eq[5];
+  bool hasEq = false;
+  for (int k = 0; k < p.nw; k++) {
+    uint16_t a = p.wa[k];
+    if (a == 0x0207) menu.strip = p.wv[k] & 1;
+    else if (a >= 0x0275 && a <= 0x0279) { eq[a - 0x0275] = p.wv[k]; hasEq = true; }
+    else if (a >= 0x0210) paramDecode(a, p.wv[k]);
+  }
+  if (hasEq) stripEqDecode(eq);
+  presetMatch(8); presetMatch(12); presetMatch(13);
+  if (p.tuneSpeed >= 0) {
+    menu.speed = p.tuneSpeed;
+    if (p.tuneChrom) menu.scale = 0;
+    else if (menu.scale == 0) menu.scale = 1;            // snap to the key: a CHROMATIC page becomes MAJOR
+  }
+  if (p.v1 >= 0) harmonyP[0].v = p.v1;
+  if (p.v2 >= 0) harmonyP[1].v = p.v2;
+}
+
+static int presetSavedIdx() {                         // the last loaded preset (NVS), -1 = none
+  Preferences pr;
+  pr.begin("ui", true);
+  int v = pr.getInt("preset", -1);
+  pr.end();
+  return v;
+}
+
+static void presetSave() {
+  if (presetSavedIdx() == menu.preset) return;
+  Preferences pr;
+  pr.begin("ui", false);
+  pr.putInt("preset", menu.preset);
+  pr.end();
+}
+
+static bool applyPreset(int i) {
+  const PresetDef &p = PRESETS[i];
+  presetDecode(i);
+  static uint16_t aa[128];
+  static uint32_t w[128];
+  int n = 0;
+  for (int k = 0; k < p.nw; k++) { aa[n] = p.wa[k]; w[n++] = p.wv[k]; }
+  if (p.tuneSpeed >= 0) {                               // TUNE: speed + snap map for the TUNE page's key / scale
+    uint8_t ta[13];
+    uint32_t tv[13];
+    tuneFill(ta, tv);
+    for (int k = 0; k < 13; k++) { aa[n] = ta[k]; w[n++] = tv[k]; }
+  }
+  for (int k = 0; k < p.chainN; k++)                    // HARMONY: both maps in the key
+    if (p.chain[k] == 10) { n = harmMapFill(1, aa, w, harmMapFill(0, aa, w, n)); break; }
+  bool ok = onceWriteXLong(aa, w, n);
+  if (ok) { menu.preset = i; presetDirty = false; presetSave(); }
+  Serial.printf("PRESET %02d %s: %d writes %s\n", p.n, p.name, n, ok ? "ok" : "FAILED");
+  displayStatus(ok ? "PRESET LOADED" : "DSP NOT ANSWERING", ok ? 0x30D060 : th::RED);
+  return ok;
+}
+
+// PRESET page: level 0 = the loaded preset (the knob loads the next / previous once it rests 150 ms), 1 = the types,
+// 2 = the presets of one type (enter loads)
+static int presetLevel = 0, presetType = 0, presetCur = 0, presetPending = -1;
+static uint32_t presetAt = 0;
+
+static int presetTypeList(int t, int *idx) {          // PRESETS indexes of type t, in number order
+  int n = 0;
+  for (int i = 0; i < N_PRESETS; i++) if (PRESETS[i].type == t) idx[n++] = i;
+  return n;
+}
+
+void presetTick() {                                   // every loop
+  if (presetPending < 0 || millis() - presetAt < 150) return;
+  int i = presetPending;
+  presetPending = -1;
+  applyPreset(i);
+  uiDirty = true;
+}
+
+static void presetKnob(int d) {
+  if (presetLevel == 0) {
+    int cur = presetPending >= 0 ? presetPending : menu.preset;
+    presetPending = cur < 0 ? (d > 0 ? 0 : N_PRESETS - 1) : wrapv(cur + d, N_PRESETS);
+    presetAt = millis();
+  } else {
+    int idx[N_PRESETS];
+    presetCur = wrapv(presetCur + d, presetLevel == 1 ? N_PTYPES : presetTypeList(presetType, idx));
+  }
+}
+
+static void presetEnter() {
+  int idx[N_PRESETS];
+  if (presetLevel == 0) {
+    int cur = presetPending >= 0 ? presetPending : menu.preset;
+    presetLevel = 1;
+    presetCur = cur >= 0 ? PRESETS[cur].type : 0;
+  } else if (presetLevel == 1) {
+    int n = presetTypeList(presetType = presetCur, idx);
+    presetLevel = 2;
+    presetCur = 0;
+    for (int r = 0; r < n; r++) if (idx[r] == menu.preset) presetCur = r;
+  } else {
+    if (presetCur < presetTypeList(presetType, idx)) { presetPending = -1; applyPreset(idx[presetCur]); }
+    presetLevel = 0;
+  }
+  pageT0 = millis();
+}
+
+static void presetBack() {
+  if (presetLevel == 0) { uiPage = PAGE_FX; menu.cursor = 0; return; }
+  presetLevel--;
+  if (presetLevel == 1) presetCur = presetType;
+  pageT0 = millis();
+}
+
+static void drawPreset(uint32_t now) {
+  backdrop();
+  char v[40];
+  if (presetLevel == 0) {
+    th::header("PRESET", now);
+    int i = presetPending >= 0 ? presetPending : menu.preset;
+    if (i < 0) {
+      th::metal(60, 46, "NO PRESET", 1, th::WHITE, th::YELLOW, 'm');
+      th::text(60, 62, "TURN THE KNOB", th::p15(th::STEEL_L), 1, 'm');
+      statusOr("KNOB:LOAD ENT:LIST");
+      return;
+    }
+    const PresetDef &p = PRESETS[i];
+    snprintf(v, sizeof v, "%02d", p.n);
+    th::metal(5, 25, v, 3, th::WHITE, th::YELLOW);
+    th::text(119, 27, PRESET_TYPES[p.type], th::p15(th::STEEL_L), 1, 'r');   // clear of the number (x 5..41)
+    if (presetPending >= 0) th::text(116, 38, "LOADING", th::p15(th::YELLOW), 1, 'r');
+    else if (menu.mode == 3 && menu.byp1) th::text(116, 38, "BYPASSED", th::p15(th::RED), 1, 'r');
+    else if (presetDirty) th::text(116, 38, "EDITED", th::p15(th::ORANGE), 1, 'r');
+    th::metal(60, 54, p.name, 1, th::WHITE, th::YELLOW, 'm');
+    snprintf(v, sizeof v, "%s", p.strip ? "STR" : "");
+    for (int k = 0; k < p.chainN; k++) {
+      if (v[0]) strlcat(v, ">", sizeof v);
+      strlcat(v, p.chain[k] < N_FX ? FX_SHORT[p.chain[k]] : "?", sizeof v);
+    }
+    int len = strlen(v);
+    if (len <= 20) th::text(60, 70, v, th::p15(th::ORANGE), 1, 'm');
+    else {                                              // split at the '>' nearest the middle
+      int cut = len / 2;
+      while (cut > 0 && v[cut] != '>') cut--;
+      th::text(60, 77, v + cut, th::p15(th::ORANGE), 1, 'm');
+      v[cut] = 0;
+      th::text(60, 68, v, th::p15(th::ORANGE), 1, 'm');
+    }
+    if (p.note[0]) {                                    // the pixel font has no lower case
+      int k = 0;
+      for (; p.note[k] && k < 20; k++) v[k] = toupper(p.note[k]);
+      v[k] = 0;
+      th::text(60, 90, v, th::p15(th::ASH), 1, 'm');
+    }
+    statusOr("KNOB:LOAD ENT:LIST");
+    return;
+  }
+  int idx[N_PRESETS];
+  int n = presetLevel == 1 ? N_PTYPES : presetTypeList(presetType, idx);
+  th::header(presetLevel == 1 ? "TYPES" : PRESET_TYPES[presetType], now);
+  const int ROWS = 5;
+  int first = constrain(presetCur - 2, 0, max(0, n - ROWS));
+  for (int r = first; r < n && r < first + ROWS; r++) {
+    int y = 26 + (r - first) * 16, dx = th::slide(now, pageT0, r - first);
+    if (presetLevel == 1) {
+      int ix[N_PRESETS];
+      snprintf(v, sizeof v, "%d", presetTypeList(r, ix));
+      th::row(y, PRESET_TYPES[r], v, presetCur == r, false, now, dx);
+    } else {
+      const PresetDef &p = PRESETS[idx[r]];
+      snprintf(v, sizeof v, "%02d %s", p.n, p.name);
+      th::row(y, v, idx[r] == menu.preset ? "*" : "", presetCur == r, false, now, dx);
+    }
+  }
+  uint32_t ac = th::p15(th::YELLOW);                      // more rows above / below
+  if (first > 0) th::cv.fillTriangle(117, 27, 119, 27, 118, 24, ac);
+  if (first + ROWS < n) th::cv.fillTriangle(117, 101, 119, 101, 118, 104, ac);
+  statusOr(presetLevel == 1 ? "ENT:OPEN R2:BACK" : "ENT:LOAD R2:BACK");
+}
+
 // At ESP start (e.g. after an OTA reboot the DSP keeps playing): take over the DSP's mode / FX so the screen shows
 // what is actually playing. Values out of range (stock firmware running) are ignored.
 void uiAdoptDsp() {
   uint8_t aa[3] = {0x20, 0x21, 0x22};
   uint32_t v[3];
   if (!onceReadXMany(aa, v, 3)) return;
-  if (v[0] >= (uint32_t)N_MODES || v[1] >= (uint32_t)N_FX || v[2] >= (uint32_t)N_FX) return;
+  if (v[0] > 3 || v[1] >= (uint32_t)N_FX || v[2] >= (uint32_t)N_FX) return;
   menu.mode = v[0]; menu.fx1 = v[1]; menu.fx2 = v[2];
-  Serial.printf("DSP state adopted: mode=%d fx1=%d fx2=%d\n", menu.mode, menu.fx1, menu.fx2);
+  uint16_t la[8] = {0x0207, 0x0200, 0x0201, 0x0202, 0x0203, 0x0204, 0x0205, 0x0206};   // STRIP flag, the chain
+  uint32_t lv[8];
+  if (onceReadXLong(la, lv, 8)) {
+    if (lv[0] <= 1) menu.strip = lv[0];
+    if (menu.mode == 3 && lv[1] >= 1 && lv[1] <= 6) {
+      menu.chainN = lv[1];
+      for (int i = 0; i < 6; i++) menu.chain[i] = lv[2 + i] < (uint32_t)N_FX ? lv[2 + i] : 0;
+      int sp = presetSavedIdx();               // the preset loaded last: take it back when the chain matches
+      if (sp >= 0 && sp < N_PRESETS && PRESETS[sp].chainN == menu.chainN &&
+          !memcmp(PRESETS[sp].chain, menu.chain, menu.chainN)) {
+        presetDecode(sp);
+        menu.strip = lv[0] == 1;
+        menu.preset = sp;
+      }
+    }
+  }
+  Serial.printf("DSP state adopted: mode=%d fx1=%d fx2=%d strip=%d preset=%d\n", menu.mode, menu.fx1, menu.fx2,
+                menu.strip, menu.preset >= 0 ? PRESETS[menu.preset].n : 0);
+}
+
+static void stripSet(bool on) {            // the FX page's STRIP row
+  uint16_t aa = 0x0207;
+  uint32_t w = on;
+  bool ok = onceWriteXLong(&aa, &w, 1);
+  if (ok) menu.strip = on;
+  displayStatus(ok ? (on ? "STRIP ON" : "STRIP OFF") : "DSP NOT ANSWERING", ok ? 0x30D060 : th::RED);
 }
 
 // The whole panel state to the DSP in one halt: mode, FX1/FX2 (bypassed = CLEAN), tune, pots. A freshly booted kernel
 // starts on its own defaults, so after every boot this makes the sound match the screen and the knobs.
 bool uiPushAll() {
+  bool pr = menu.preset >= 0 && !presetDirty;    // an unedited preset goes out exactly as stored (after the rest)
+  if (pr) menu.byp1 = false;
   uint8_t aa[20] = {0x20, 0x21, 0x22};
-  uint32_t v[20] = {(uint32_t)menu.mode, (uint32_t)(menu.byp1 ? 0 : menu.fx1), (uint32_t)(menu.byp2 ? 0 : menu.fx2)};
+  uint32_t v[20] = {(uint32_t)(menu.mode == 3 && menu.byp1 ? 0 : menu.mode), (uint32_t)(menu.byp1 ? 0 : menu.fx1),
+                    (uint32_t)(menu.byp2 ? 0 : menu.fx2)};
   tuneFill(aa + 3, v + 3);
   int mv[3];
   for (int k = 0; k < 3; k++) mv[k] = analogReadMilliVolts(PIN_POT[k]);
   memcpy(aa + 16, POT_AA, 4);
   potFill(mv, v + 16);
-  bool ok = onceWriteXMany(aa, v, 20) && pushParams();
+  bool ok = onceWriteXMany(aa, v, 20) && pushParams() && (!pr || applyPreset(menu.preset));
   if (ok) for (int k = 0; k < 3; k++) potSent[k] = mv[k];
   displayStatus(ok ? "PANEL -> DSP" : "DSP NOT ANSWERING", ok ? 0x30D060 : th::RED);
   return ok;
@@ -450,39 +953,74 @@ bool uiPushAll() {
 
 // Change the selected value by d (encoder steps or K_R1)
 static void uiChange(int d) {
-  if (uiPage == PAGE_EDIT) { editChange(d); uiShow(); return; }
+  if (uiPage == PAGE_EDIT) { editChange(d); if (menu.preset >= 0) presetDirty = true; uiShow(); return; }
+  if (uiPage == PAGE_PRESET) { presetKnob(d); uiShow(); return; }
   int c = menu.cursor;
   if (uiPage == PAGE_FX) {
-    if (c == 0) { menu.mode = wrapv(menu.mode + d, N_MODES); send(0x20, menu.mode); }
-    if (c == 1) { menu.fx1 = wrapv(menu.fx1 + d, N_FX); if (!menu.byp1) send(0x21, menu.fx1); }
-    if (c == 2) { menu.fx2 = wrapv(menu.fx2 + d, N_FX); if (!menu.byp2) send(0x22, menu.fx2); }
+    if (c < 3) menu.preset = -1;                                         // a manual setup: no preset any more
+    if ((c == 1 || c == 2) && menu.mode == 3) {                          // FX 1 / FX 2 leave the chain
+      menu.mode = c == 1 ? 0 : 1;
+      menu.byp1 = false;
+      send(0x20, menu.mode);
+    }
+    if (c == 0) { menu.mode = wrapv(menu.mode + d, N_MODES); menu.byp1 = false; send(0x20, menu.mode); }
+    if (c == 1) { menu.fx1 = fxStep(menu.fx1, d); if (!menu.byp1) send(0x21, menu.fx1); }
+    if (c == 2) { menu.fx2 = fxStep(menu.fx2, d); if (!menu.byp2) send(0x22, menu.fx2); }
+    if (c == 3 && (d & 1)) { stripSet(!menu.strip); if (menu.preset >= 0) presetDirty = true; }   // every step toggles
     if ((c == 1 && menu.fx1 == 4) || (c == 2 && menu.fx2 == 4)) tuneSend();  // TUNE picked: push its settings
+    if ((c == 1 && menu.fx1 == 10) || (c == 2 && menu.fx2 == 10)) harmSend(); // HARMONY: maps in the current key
   } else if (uiPage == PAGE_TUNE) {
     if (c == 0) menu.key = wrapv(menu.key + d, 12);
     if (c == 1) menu.scale = wrapv(menu.scale + d, 3);
     if (c == 2) menu.speed = constrain(menu.speed + d, 0, 10);
+    if (c > 0 && menu.preset >= 0) presetDirty = true;   // the key is not part of a preset; scale / speed are
     tuneSend();
+    if (c < 2 && fxInPath(10)) harmSend();                // HARMONY's diatonic voices follow the key
   }
   uiShow();
 }
 
 static void cursorMove(int d) {
   if (uiPage == PAGE_SYS) return;
+  if (uiPage == PAGE_PRESET) { presetKnob(d); uiShow(); return; }
   if (uiPage == PAGE_EDIT) {
     int n = fxParams(editFx()).n;
     if (n) editCursor = wrapv(editCursor + d, n);
     uiShow();
     return;
   }
-  menu.cursor = wrapv(menu.cursor + d, 3);
+  menu.cursor = wrapv(menu.cursor + d, uiPage == PAGE_FX ? 4 : 3);     // FX: MODE, FX 1, FX 2, STRIP
   uiShow();
 }
 
 static void bypass(int which) {
+  if (menu.mode == 3) {                      // CHAIN: B1 bypasses the whole chain (SINGLE + CLEAN), STRIP stays
+    if (which != 1) { displayStatus("CHAIN: B1 BYPASSES", th::STEEL_L); return; }
+    menu.byp1 = !menu.byp1;
+    uint8_t aa[2] = {0x20, 0x21};
+    uint32_t v[2] = {menu.byp1 ? 0u : 3u, 0};
+    bool ok = onceWriteXMany(aa, v, menu.byp1 ? 2 : 1);
+    if (!ok) menu.byp1 = !menu.byp1;
+    displayStatus(!ok ? "DSP NOT ANSWERING" : menu.byp1 ? "CHAIN BYPASSED" : "CHAIN ON", ok ? 0x30D060 : th::RED);
+    uiDirty = true;
+    return;
+  }
   bool &b = which == 1 ? menu.byp1 : menu.byp2;
   b = !b;
   send(which == 1 ? 0x21 : 0x22, b ? 0 : (which == 1 ? menu.fx1 : menu.fx2));  // bypass = CLEAN in that slot
   if (uiPage == PAGE_FX) uiShow();
+}
+
+static void freezeToggle() {                 // B3: REVERB's FREEZE (input off, the tail rings on)
+  if (!fxInPath(12)) { displayStatus("NO REVERB TO FREEZE", th::STEEL_L); return; }
+  FxParam &f = reverbP[6];
+  f.v = !f.v;
+  uint16_t aa = f.addr;
+  uint32_t w = f.v;
+  bool ok = onceWriteXLong(&aa, &w, 1);
+  if (!ok) f.v = !f.v;
+  displayStatus(!ok ? "DSP NOT ANSWERING" : f.v ? "FREEZE ON" : "FREEZE OFF", !ok ? th::RED : f.v ? 0x2E8BFF : 0x30D060);
+  uiDirty = true;
 }
 
 void uiButton(int b) {
@@ -493,15 +1031,22 @@ void uiButton(int b) {
     case K_T1: uiPage = PAGE_FX; menu.cursor = 0; uiShow(); break;
     case K_T2: uiPage = PAGE_TUNE; menu.cursor = 0; uiShow(); break;
     case K_T3: uiPage = PAGE_SYS; uiShow(); break;
-    case K_T5: uiPage = PAGE_EDIT; editCursor = 0; uiShow(); break;
+    case K_T4: uiPage = PAGE_PRESET; presetLevel = 0; uiShow(); break;
+    case K_T5: editStrip = uiPage == PAGE_FX && menu.cursor == 3; uiPage = PAGE_EDIT; editCursor = 0; uiShow(); break;
     case K_T6: cursorMove(-1); break;
     case K_B6: cursorMove(1); break;
-    case K_R1: case K_B4: case K_B5:                         // ENTER (value +1; on SYSTEM: button test)
-      if (uiPage == PAGE_SYS) testStart(); else uiChange(1);
+    case K_R1: case K_B4: case K_B5:                         // ENTER (value +1; SYSTEM: button test; PRESET: list)
+      if (uiPage == PAGE_SYS) testStart();
+      else if (uiPage == PAGE_PRESET) { presetEnter(); uiShow(); }
+      else uiChange(1);
       break;
-    case K_R2: uiPage = PAGE_FX; menu.cursor = 0; uiShow(); break;
+    case K_R2:                                               // back (PRESET: one level up)
+      if (uiPage == PAGE_PRESET) presetBack(); else { uiPage = PAGE_FX; menu.cursor = 0; }
+      uiShow();
+      break;
     case K_B1: bypass(1); break;
     case K_B2: bypass(2); break;
+    case K_B3: freezeToggle(); break;
     default: {
       char m[24];
       snprintf(m, sizeof m, "%s: NOT ASSIGNED", BTN_NAMES[b]);
@@ -537,6 +1082,10 @@ void menuDraw() { uiPage = PAGE_FX; uiShow(); }
 
 // Which pedal the idle screen shows (or -1 = vocal: the face sings): FX1, else FX2 when it is in the chain
 int idlePedal() {
+  if (menu.mode == 3) {                      // CHAIN: its first pedal-type effect
+    for (int i = 0; i < menu.chainN; i++) if (menu.chain[i] < N_FX && FX_PEDAL[menu.chain[i]]) return menu.chain[i];
+    return -1;
+  }
   if (FX_PEDAL[menu.fx1]) return menu.fx1;
   if (menu.mode != 0 && FX_PEDAL[menu.fx2]) return menu.fx2;
   return -1;

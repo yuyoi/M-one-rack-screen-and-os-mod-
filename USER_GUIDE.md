@@ -89,9 +89,12 @@ python codec_on.py                      # writes codec_on.hex (P:$0900): codec o
 python ../tools/mone.py COMx boot       # loads all four over J8, verifies, starts codec_on -> kernel
                                         # then the ESP sends its panel state, so the sound matches the screen
 ```
-Effects: CLEAN, HEAVY, REVERSE, COMP, TUNE (autotune), VOX (vocal chain), RADIO (6 lo-fi modes), FORMANT and OCTAVE
-(PSOLA). Modes: SINGLE, DOUBLE (parallel), DBL-SINGLE (series). Parameter addresses: `VOCAL_ARCH.md` in the FX lab
-notes; `boot` loads autotune, vocal (+ vocal_tab in SRAM), vocal2, os and codec_on.
+Effects: CLEAN, HEAVY, REVERSE, COMP, TUNE (autotune), VOX (vocal chain), AMP (modeled tube amp), RADIO (6 lo-fi
+modes), FORMANT and OCTAVE (PSOLA), HARMONY, DOUBLER, REVERB, DELAY, SHIMMER (goes right before REVERB), SWELL
+(auto fade-in) and GRAIN (granular cloud; shares REVERSE's buffer, so never both). STRIP is an input stage in front of every mode (gate, de-esser, leveler, EQ, drive). Modes: SINGLE,
+DOUBLE (parallel), DBL-SINGLE (series).
+Parameter addresses: `VOCAL_ARCH.md` in the FX lab notes; `boot` loads autotune, vocal, vocal2, vocal3, amp (each
+with its table in SRAM), os and codec_on.
 `python model/sim_os_tune.py 215` runs the whole OS in the simulator with FX 1 = TUNE (expect A3, within a few cents).
 `python model/sim_vox.py` does the same with FX 1 = VOX and compares it with `model/vox_model.py` (expect ~1e-7).
 `python model/sim_radio.py MODE` (0-5) and `python model/sim_psola.py 8 1.0 0.78` (FORMANT) / `9 0.5 1.0` (OCTAVE)
@@ -110,6 +113,11 @@ to ~670 cycles per frame).
 part above 3 kHz saturated and mixed back in, for clarity without boosting hiss) and a 110 ms slap. The constants
 are at the top of `dsp/model/vox_model.py`.
 
+**AMP** is a modeled tube amp: a 4x oversampled preamp (three triode stages with coupling filters, dynamic bias and
+soft clipping), a Marshall-style tone stack, a power amp with resonance, presence and supply sag, and a 512-tap cab
+IR. `python model/sim_amp.py` runs it in the simulator against `model/amp_ref.py` (expect bit-exact). With the kernel
+it takes ~1770 of the 2112 cycles per frame, so it runs on its own, without vocal effects next to it.
+
 ## The front panel
 First boot (or serial `K`): the screen asks for every button by position, T1-T6 top row, B1-B6 bottom row, R1/R2
 right column. Press each once; turn the encoder to skip a dead one. The map is stored on the ESP.
@@ -117,17 +125,34 @@ right column. Press each once; turn the encoder to skip a dead one. The map is s
 | Control | Does |
 |---|---|
 | T1 / T2 / T3 | FX page / TUNE page / SYSTEM page (live inputs, WiFi IP + signal in dBm) |
+| T4 | PRESET page: the 56 presets |
+| T5 | EDIT page: the effect's own settings |
 | T6 / B6 | cursor up / down |
 | encoder | change the selected value |
 | R1 / B4 / B5 | enter (value +1); on the SYSTEM page: button test |
 | R2 | back to the FX page |
-| B1 / B2 | bypass FX 1 / FX 2 |
+| B1 / B2 | bypass FX 1 / FX 2 (a preset: B1 bypasses its whole chain) |
+| B3 | reverb FREEZE on / off (while REVERB plays) |
 | POT 1 / 2 / 3 | volume (40 dB taper, far left = off) / dry-wet mix / tone (low-pass, far right = open) |
 | hold R1 + T6, 3 s | reboot the ESP (only while the face is asleep) |
 
-- FX page: MODE, FX 1, FX 2. Every change goes to the DSP at once.
+- PRESET page (T4): the loaded preset (number, name, type, chain, a hint like TONE DARK). Turn the knob (or T6 / B6)
+  for the previous / next one: it loads once the knob rests. Enter opens the list by type (STUDIO, TUNE, HARMONY,
+  LO-FI / RADIO, MONSTER, AMBIENT), enter again opens a type, enter on a preset loads it; R2 goes back a level.
+  A preset is a chain of up to 6 effects (CHAIN mode) plus STRIP and every setting, sent in one short halt. Its tune
+  and harmony parts follow the TUNE page's key. The EDIT pages show the preset's values; changing one marks the
+  preset EDITED. The ESP remembers the last preset and takes it back after a reboot when the DSP still plays it.
+  The table is generated: `py -3.10 tools/gen_presets.py` (from `dsp/presets.py`) writes `firmware/mone_dev/presets.h`.
+- FX page: MODE, FX 1, FX 2, STRIP (on / off; T5 on this row opens its settings). Every change goes to the DSP at
+  once. With a preset loaded MODE shows CHAIN and the routing line shows the chain; turning FX 1 / FX 2 leaves it.
 - TUNE page: KEY, SCALE (chromatic / major / minor), SPEED 0-10 (0 = natural glide, 10 = hard robot). Notes outside
   the scale snap to the nearest scale note (ties snap down). All 13 values go to the DSP in one short halt.
+- EDIT page (T5): the settings of FX 1 (or of FX 2 when FX 1 has none) for RADIO, FORMANT, OCTAVE, HARMONY, DOUBLER,
+  REVERB, DELAY, SHIMMER, SWELL and GRAIN; on the FX page's STRIP row, STRIP's own (GATE, DE-ESS, COMP, MAKEUP, DRIVE, EQ
+  PRESENCE / AIR / LOW + EQ GAIN). The first row of FORMANT (VOICE), REVERB and DELAY (TYPE) is a preset that sets the rows under it;
+  turning one of those rows by hand makes it CUSTOM. Long lists scroll (yellow arrows at the right edge). Changes go
+  out at once. HARMONY's two voices are intervals in the TUNE page's key and scale (3RD UP, 5TH DN, ...; CHROMATIC
+  harmonizes in major) or fixed ones (+7 ST, ...); changing the key re-sends them.
 - BUTTON TEST page (SYSTEM page, then enter; or serial `T`): every press only lights its box. Green = has worked,
   yellow = latest, grey = not seen yet. The latest press shows its source (GPIO pin or ladder mV); a press that
   matches no learned button shows `??` in red. The page also shows the pots as bars and counts encoder steps.
@@ -136,7 +161,8 @@ right column. Press each once; turn the encoder to skip a dead one. The map is s
   the mouth opens with the level, loud parts close the eyes to ^ ^, and music notes float up. The level comes from
   the kernel through the DSP's OnCE mailbox (OGDB), read over JTAG without halting the DSP, so no audio blips.
 - No input for 8 s: uwu. A minute: it sleeps. The first touch only wakes it.
-- PC keys still work: `mone.py COMx key ]=` (`[ ]` cursor, `- =` value, `F` FX page).
+- PC keys still work: `mone.py COMx key ]=` (`[ ]` cursor, `- =` value, `F` FX page, `#` PRESET page,
+  `< >` previous / next preset).
 
 ## Other commands (`tools/mone.py COMx ...`)
 | Command | What |
