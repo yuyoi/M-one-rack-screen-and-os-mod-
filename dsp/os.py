@@ -4,7 +4,7 @@ Params (X short, written live by the ESP over J8):
   X:$20 mode   0 = SINGLE (FX1)   1 = DOUBLE (FX1 || FX2, mixed)   2 = DOUBLE-SINGLE (FX1 -> FX2)
   X:$21 FX1    X:$22 FX2   effect ids: 0 clean, 1 heavy, 2 reverse, 3 comp, 4 tune (autotune.py at P:$400),
                            5 vox, 6 amp (amp.py + amp_tab), 7 radio (vocal.py: load vocal.hex + vocal_tab.hex too),
-                           8 formant, 9 octave (vocal2.py), 10-11 clean for now, 12 reverb, 13 delay (vocal3.py + vocal3_tab)
+                           8 formant, 9 octave (vocal2.py), 10 harmony, 11 doubler (vocal4.py + vocal4_tab), 12 reverb, 13 delay (vocal3.py + vocal3_tab), 14 shimmer (vocal4.py), 15 swell (vocal5.py)
   tune: X:$0B retune speed (Q23 per sample), X:$23-$2E snap map (signed semitones per pitch class, 0 = chromatic)
   output stage (the pots, after every mode): X:$2F dry gain, X:$3D wet gain (mix: the ESP sends 1-m and m),
     X:$3E tone k (one-pole low-pass, $7FFFFF = off), X:$3C volume; X:$3F = tone filter state
@@ -27,7 +27,9 @@ import autotune  # noqa: E402  (assembles it: we only need its entry points)
 TUNE_INIT, FX_TUNE = autotune.a.labels['tune_init'], autotune.a.labels['fx_tune']
 import vocal  # noqa: E402  (vocal.py at P:$0100: VOX, RADIO; its tables: vocal_tab.hex in external SRAM)
 import vocal2  # noqa: E402  (vocal2.py at P:$0700: PSOLA = FORMANT, OCTAVE)
-import vocal3  # noqa: E402  (vocal3.py at P:$1000: REVERB; vocal3_tab.hex in SRAM)
+import vocal3  # noqa: E402  (vocal3.py at P:$1000: REVERB, DELAY; vocal3_tab.hex in SRAM)
+import vocal4  # noqa: E402  (vocal4.py at P:$1220: HARMONY, DOUBLER, SHIMMER; vocal4_tab.hex in SRAM)
+import vocal5  # noqa: E402  (vocal5.py at P:$0310: STRIP input stage, SWELL; vocal5_tab.hex in SRAM)
 
 BASE = 0xA00
 METER = 'meter' in sys.argv[1:]        # py os.py meter: histogram of idle spins per frame at X:$1400-$14FF
@@ -52,7 +54,7 @@ def data(n): fix.append((len(p), n, 0)); p.append(0)                        # ta
 def absx(W, reg, addr): w(E('Movex_ea', W=W, d=R5[reg], M=6, R=0), addr)     # move x:$long <-> reg
 HIST = 0x1400                          # meter build: X:$1400-$14FF (AMP owns X:$1000-$12FF)
 CH_N, CH_I = 0x0200, 0x0208            # CHAIN: X:$0200 n, $0201-$0206 ids, $0207 strip flag, $0208 loop index
-N_IDS = 14                             # effect table size (asserted below)
+N_IDS = 16                             # effect table size (asserted below)
 
 def call_fx(param):                     # jsr table[x:param]
     ext(0x66F400, 'table')              # move #table,r6
@@ -68,7 +70,9 @@ for m in range(8):                      # m0..m7 linear (TC leaves m0 as a modul
 w(0x0BF080, TUNE_INIT)                  # jsr tune_init (clears its buffers, default speed, chromatic)
 w(0x0BF080, vocal.VOX_INIT)             # jsr vox_init (vocal.py: state, slap buffer, coefficients)
 w(0x0BF080, vocal2.VOCAL2_INIT)         # jsr vocal2_init (PSOLA instances, rings, params)
-w(0x0BF080, vocal3.VOCAL3_INIT)         # jsr vocal3_init (reverb buffer, state, params)
+w(0x0BF080, vocal3.VOCAL3_INIT)         # jsr vocal3_init (reverb + delay buffers, state, params)
+w(0x0BF080, vocal4.VOCAL4_INIT)         # jsr vocal4_init (harmony + doubler rings, state, params)
+w(0x0BF080, vocal5.VOCAL5_INIT)         # jsr vocal5_init (strip + swell state, params)
 w(0x64F400, 0x020000, 0x200013)         # r4 = $020000 ; clr a
 w(0x57F400, 0x010000)                   # b = 65536
 L('clr')
@@ -110,7 +114,12 @@ if METER:
     w(0x57E700, 0x014188, 0x576700)     # x:(r7) += 1  (r7 = HIST + spins this frame)
     L('m_keep')
     w(0x67F400, HIST)                   # r7 = HIST
-w(0x56B000, 0x200060, 0x21C500, 0x453A00)  # x1 = sat(L+R) ; x:$3A = dry
+w(0x56B000, 0x200060, 0x21C500)         # x1 = sat(L+R)
+absx(1, 'A', CH_N + 7); w(0x200003)     # a = strip flag ; tst a
+jcc(0x0EA000, 'no_strip')               # jeq
+w(0x0BF080, vocal5.FX_STRIP)            # jsr fx_strip (input stage for presets: gate, de-ess, comp, EQ, drive)
+L('no_strip')
+w(0x453A00)                             # x:$3A = dry (after the strip)
 w(0x56A000, 0x200003)                   # a = mode ; tst a
 jcc(0x0EA000, 'single')                 # jeq single
 w(0x014185)                             # cmp #1,a
@@ -169,13 +178,15 @@ L('table')
 data('fx_clean'); data('fx_heavy'); data('fx_rev'); data('fx_comp'); data('fx_tune'); data('fx_vox')
 data('fx_amp')                         # 6 = AMP (amp.py, research session): entry P:$0C00
 data('fx_radio'); data('fx_formant'); data('fx_octave')
-data('fx_clean'); data('fx_clean')      # 10 HARMONY, 11 DOUBLER: CLEAN until they are built
-data('fx_reverb'); data('fx_delay')
+data('fx_harmony'); data('fx_doubler')
+data('fx_reverb'); data('fx_delay'); data('fx_shimmer'); data('fx_swell')
 labels['fx_tune'] = FX_TUNE
 labels['fx_vox'] = vocal.FX_VOX
 labels['fx_radio'] = vocal.FX_RADIO
 labels['fx_formant'], labels['fx_octave'] = vocal2.FX_FORMANT, vocal2.FX_OCTAVE
 labels['fx_reverb'], labels['fx_delay'] = vocal3.FX_REVERB, vocal3.FX_DELAY
+labels['fx_harmony'], labels['fx_doubler'] = vocal4.FX_HARMONY, vocal4.FX_DOUBLER
+labels['fx_shimmer'], labels['fx_swell'] = vocal4.FX_SHIMMER, vocal5.FX_SWELL
 labels['fx_amp'] = 0x0C00                # amp.py: X1 in -> X1 out, restores M0-M6, first call copies its table
 
 # ---------------- clean

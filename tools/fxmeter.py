@@ -35,7 +35,7 @@ def main():
     port = sys.argv[1]
     ids = [v if v.startswith('chain:') else int(v) for v in sys.argv[2:]]
     tmpd = tempfile.mkdtemp()
-    for name in ('autotune.py', 'vocal.py', 'vocal2.py', 'vocal3.py', 'amp.py'):
+    for name in ('autotune.py', 'vocal.py', 'vocal2.py', 'vocal3.py', 'vocal4.py', 'vocal5.py', 'amp.py'):
         subprocess.run([PY, os.path.join(DSP, name)], check=True, capture_output=True)
     subprocess.run([PY, os.path.join(DSP, 'os.py'), 'meter'], check=True, capture_output=True)
     subprocess.run([PY, os.path.join(DSP, 'codec_on.py'), 'dac=00'], check=True, capture_output=True, cwd=DSP)
@@ -50,12 +50,14 @@ def main():
     with contextlib.redirect_stdout(io.StringIO()):
         loop = runpy.run_path(os.path.join(DSP, 'os.py'))['labels']['loop']
     for fx in ids:
-        chain = [int(v) for v in fx.split(':')[1].split(',')] if isinstance(fx, str) else None
+        strip = isinstance(fx, str) and fx.endswith('+s')                 # chain:...+s = STRIP on too
+        chain = [int(v) for v in fx.split(':')[1].rstrip('+s').split(',')] if isinstance(fx, str) else None
         w[k + 1] = '%06X' % (0 if chain else fx)
         osk = os.path.join(tmpd, 'os_m%s.hex' % str(fx).replace(':', '_').replace(',', '_'))
         open(osk, 'w').write(base + '\n' + ' '.join(w) + '\n')
         for f in ('autotune.hex', 'vocal.hex', 'vocal_tab.hex', 'vocal2.hex', 'vocal2_tab.hex', 'vocal3.hex',
-                  'vocal3_tab.hex', 'amp.hex', 'amp_tab.hex'):
+                  'vocal3_tab.hex', 'vocal4.hex', 'vocal4_tab.hex', 'vocal5.hex', 'vocal5_tab.hex', 'amp.hex',
+                  'amp_tab.hex'):
             out = run(port, 'load', os.path.join(DSP, f))
             if 'verify OK' not in out:
                 raise SystemExit('%s: %s' % (f, out))
@@ -68,7 +70,8 @@ def main():
             time.sleep(1)
             from asm56 import Asm, R5
             pa = Asm(0x950)
-            for addr, val in [(0x20, 3), (0x0200, len(chain))] + [(0x0201 + i, c) for i, c in enumerate(chain)]:
+            for addr, val in ([(0x20, 3), (0x0200, len(chain)), (0x0207, int(strip))]
+                              + [(0x0201 + i, c) for i, c in enumerate(chain)]):
                 pa.par(move=('Movex_ea', dict(W=1, d=R5['A'], M=6, R=4)), ext=val)
                 pa.par(move=('Movex_ea', dict(W=0, d=R5['A'], M=6, R=0)), ext=addr)
             pa.labels['loop'] = loop
@@ -88,7 +91,7 @@ def main():
         lo = nz[0][0] if nz else -1
         print('FX1=%s (read back %d)  frames %d  min spins %d -> worst %d cycles used of %d  (typical %d)' % (
             fx, fx1, tot, lo, FRAME - lo * SPIN, FRAME, FRAME - max(nz, key=lambda t: t[1])[0] * SPIN))
-        print('   lowest bins:', nz[:5])
+        print('   lowest bins:', nz[:5], ' top bins:', sorted(nz, key=lambda t: -t[1])[:4])
         if chain:
             cb = read(port, 'x', 0x0200, 4, os.path.join(tmpd, 'c.bin'))
             print('   CHAIN mode %d  block %s' % (read(port, 'x', 0x20, 1, os.path.join(tmpd, 'm.bin'))[0], cb))

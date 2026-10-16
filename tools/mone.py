@@ -99,7 +99,7 @@ def main():
     if a[1] == 'boot':  # boot [dspdir]: load autotune + os + codec_on, start codec_on (it starts the OS); needs the stock boot first
         d = a[2] if len(a) > 2 else os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'dsp')
         start = None
-        for name in ('autotune.hex', 'vocal.hex', 'vocal_tab.hex', 'vocal2.hex', 'vocal2_tab.hex', 'vocal3.hex', 'vocal3_tab.hex', 'amp.hex', 'amp_tab.hex', 'os.hex',
+        for name in ('autotune.hex', 'vocal.hex', 'vocal_tab.hex', 'vocal2.hex', 'vocal2_tab.hex', 'vocal3.hex', 'vocal3_tab.hex', 'vocal4.hex', 'vocal4_tab.hex', 'vocal5.hex', 'vocal5_tab.hex', 'amp.hex', 'amp_tab.hex', 'os.hex',
                      'codec_on.hex'):  # last one = start address
             lines = open(os.path.join(d, name)).read().split('\n')
             s.write(b'L%06X %s\n' % (int(lines[0], 16), lines[1].strip().encode()))
