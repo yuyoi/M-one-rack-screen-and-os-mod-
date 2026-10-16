@@ -35,7 +35,7 @@ def main():
     port = sys.argv[1]
     ids = [v if v.startswith('chain:') else int(v) for v in sys.argv[2:]]
     tmpd = tempfile.mkdtemp()
-    for name in ('autotune.py', 'vocal.py', 'vocal2.py', 'vocal3.py', 'vocal4.py', 'vocal5.py', 'amp.py'):
+    for name in ('autotune.py', 'vocal.py', 'vocal2.py', 'vocal3.py', 'vocal4.py', 'vocal5.py', 'vocal6.py', 'amp.py'):
         subprocess.run([PY, os.path.join(DSP, name)], check=True, capture_output=True)
     subprocess.run([PY, os.path.join(DSP, 'os.py'), 'meter'], check=True, capture_output=True)
     subprocess.run([PY, os.path.join(DSP, 'codec_on.py'), 'dac=00'], check=True, capture_output=True, cwd=DSP)
@@ -56,7 +56,7 @@ def main():
         osk = os.path.join(tmpd, 'os_m%s.hex' % str(fx).replace(':', '_').replace(',', '_'))
         open(osk, 'w').write(base + '\n' + ' '.join(w) + '\n')
         for f in ('autotune.hex', 'vocal.hex', 'vocal_tab.hex', 'vocal2.hex', 'vocal2_tab.hex', 'vocal3.hex',
-                  'vocal3_tab.hex', 'vocal4.hex', 'vocal4_tab.hex', 'vocal5.hex', 'vocal5_tab.hex', 'amp.hex',
+                  'vocal3_tab.hex', 'vocal4.hex', 'vocal4_tab.hex', 'vocal5.hex', 'vocal5_tab.hex', 'vocal6.hex', 'amp.hex',
                   'amp_tab.hex'):
             out = run(port, 'load', os.path.join(DSP, f))
             if 'verify OK' not in out:

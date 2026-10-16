@@ -29,11 +29,12 @@ def boot_os(fx1):
             runpy.run_path(os.path.join(HERE, '..', 'vocal3.py'), run_name='__main__')
             runpy.run_path(os.path.join(HERE, '..', 'vocal4.py'), run_name='__main__')
             runpy.run_path(os.path.join(HERE, '..', 'vocal5.py'), run_name='__main__')
+            runpy.run_path(os.path.join(HERE, '..', 'vocal6.py'), run_name='__main__')
             runpy.run_path(os.path.join(HERE, '..', 'amp.py'), run_name='__main__')
         labels = runpy.run_path(os.path.join(HERE, '..', 'os.py'), run_name='labels')['labels']
     ob, ow = hexwords('os.hex')
     s = Sim(ow, ob)
-    for name in ('autotune.hex', 'vocal.hex', 'vocal2.hex', 'vocal3.hex', 'vocal4.hex', 'vocal5.hex', 'amp.hex'):
+    for name in ('autotune.hex', 'vocal.hex', 'vocal2.hex', 'vocal3.hex', 'vocal4.hex', 'vocal5.hex', 'vocal6.hex', 'amp.hex'):
         b, w = hexwords(name)
         s.P.update({b + i: v for i, v in enumerate(w)})
     for name in ('vocal_tab.hex', 'vocal2_tab.hex', 'vocal3_tab.hex', 'vocal4_tab.hex', 'vocal5_tab.hex', 'amp_tab.hex'):
