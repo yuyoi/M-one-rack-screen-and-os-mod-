@@ -536,6 +536,23 @@ bool onceWriteXMany(const uint8_t *aa, const uint32_t *value, int n) {
 
 bool onceWriteX(uint8_t aa, uint32_t value) { return onceWriteXMany(&aa, &value, 1); }
 
+// Read X short addresses in one halt (saves/restores X0 like the writes)
+bool onceReadXMany(const uint8_t *aa, uint32_t *value, int n) {
+  if (!dspAwake) return false;
+  if (!enterDebug(false)) { jPinsDown(); return false; }
+  exec1(0x08C43C);                          // movep x0,x:OGDB
+  uint32_t savedX0 = onceRead(OC_READ_GDB);
+  for (int i = 0; i < n; i++) {
+    exec1(0x448000 | ((uint32_t)(aa[i] & 0x3F) << 8));   // move x:$aa,x0
+    exec1(0x08C43C);                        // movep x0,x:OGDB
+    value[i] = onceRead(OC_READ_GDB);
+  }
+  exec2(0x44F400, savedX0);                 // restore x0
+  resumeDebug();
+  jPinsDown();
+  return true;
+}
+
 // Live P-memory dump over OnCE: "P<start6hex><count6hex>\n". Saves/restores R0, resumes the DSP.
 // Frame: "MONEDUMP" u32 bytes, 3*count bytes (24-bit words, little-endian), u32 crc32.
 void cmdOnceMem(uint32_t readOp);
@@ -586,6 +603,10 @@ void setup() {
   wifiStart();
   faceBegin();
   btnLoad();
+  pinMode(PIN_DSP_SENSE, INPUT_PULLUP);
+  delay(5);
+  dspAwake = digitalRead(PIN_DSP_SENSE) == HIGH;  // power switch state before any JTAG
+  uiAdoptDsp();                                   // ESP rebooted (OTA)? show what the DSP is playing
   if (btnMapped()) uiShow(); else btnLearnStart();
 }
 
@@ -608,7 +629,9 @@ void loop() {
     case 'K': btnLearnStart(); break;
     case 'S': cmdStatus(); break;
     case 'V': cmdValues(); Serial.printf("VALUES dsp-sense GPIO3 = %s\n", digitalRead(PIN_DSP_SENSE) ? "HIGH (on)" : "LOW (off)");
-              Serial.printf("VALUES wifi %d dBm\n", WiFi.RSSI()); break;
+              Serial.printf("VALUES wifi %d dBm\n", WiFi.RSSI());
+              Serial.printf("VALUES menu mode=%d fx1=%d fx2=%d bypass=%d/%d\n", menu.mode, menu.fx1, menu.fx2, menu.byp1, menu.byp2);
+              break;
     case 'T': testStart(); Serial.println("button test page (R2 twice on the panel = exit)"); break;
     case 'A': Serial.printf("LEVEL %06lX\n", dspLevel()); break;   // output envelope (no halt)
     case 'U':

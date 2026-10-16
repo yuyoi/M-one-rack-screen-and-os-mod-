@@ -9,6 +9,7 @@
 
 bool onceWriteX(uint8_t aa, uint32_t value);  // in the .ino
 bool onceWriteXMany(const uint8_t *aa, const uint32_t *value, int n);
+bool onceReadXMany(const uint8_t *aa, uint32_t *value, int n);
 
 enum { PAGE_FX, PAGE_TUNE, PAGE_SYS, PAGE_TEST };
 int uiPage = PAGE_FX;
@@ -270,6 +271,17 @@ void potsToDsp(const int *mv) {
   uint32_t v[4];
   potFill(mv, v);
   if (onceWriteXMany(POT_AA, v, 4)) for (int k = 0; k < 3; k++) potSent[k] = mv[k];
+}
+
+// At ESP start (e.g. after an OTA reboot the DSP keeps playing): take over the DSP's mode / FX so the screen shows
+// what is actually playing. Values out of range (stock firmware running) are ignored.
+void uiAdoptDsp() {
+  uint8_t aa[3] = {0x20, 0x21, 0x22};
+  uint32_t v[3];
+  if (!onceReadXMany(aa, v, 3)) return;
+  if (v[0] >= (uint32_t)N_MODES || v[1] >= (uint32_t)N_FX || v[2] >= (uint32_t)N_FX) return;
+  menu.mode = v[0]; menu.fx1 = v[1]; menu.fx2 = v[2];
+  Serial.printf("DSP state adopted: mode=%d fx1=%d fx2=%d\n", menu.mode, menu.fx1, menu.fx2);
 }
 
 // The whole panel state to the DSP in one halt: mode, FX1/FX2 (bypassed = CLEAN), tune, pots. A freshly booted kernel
