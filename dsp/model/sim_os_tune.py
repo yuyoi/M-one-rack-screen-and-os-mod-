@@ -30,21 +30,13 @@ def snap_map(key, scale):            # same rule as the ESP (menu.h): offset to 
     return out
 
 
-with contextlib.redirect_stdout(io.StringIO()):
-    labels = runpy.run_path(os.path.join(HERE, '..', 'os.py'))['labels']
 f0 = float(sys.argv[1]) if len(sys.argv) > 1 else 215.0
 scale = sys.argv[2] if len(sys.argv) > 2 else 'chromatic'
 smap = snap_map(0, 'major') if scale == 'Cmaj' else [0] * 12
 
-ob, ow = hexwords('os.hex')
-tb, tw = hexwords('autotune.hex')
-s = Sim(ow, ob)
-s.P.update({tb + i: v for i, v in enumerate(tw)})
-s.pc = ob
 t = time.time()
-while s.pc != labels['loop']:        # kernel init + tune_init (no audio needed)
-    s.step()
-s.X[0x20], s.X[0x21] = 0, 4          # SINGLE, FX1 = TUNE  (what the ESP writes over J8)
+from sim_radio import boot_os        # the whole OS as `boot` loads it (kernel init calls every module's init)
+s = boot_os(4)                       # SINGLE, FX1 = TUNE  (what the ESP writes over J8)
 for pc, d in enumerate(smap):
     s.X[0x23 + pc] = d & 0xFFFFFF
 x = m.voice(f0, 0.6)

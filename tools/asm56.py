@@ -149,5 +149,11 @@ class Asm:
                 raise ValueError('P:%04X %06X does not decode: %s' % (self.base + i, self.w[i], t))
             i += n
 
-    def hexfile(self, path):
-        open(path, 'w').write('%X\n%s\n' % (self.base, ' '.join('%06X' % x for x in self.w)))
+    def hexfile(self, path):                # atomic (temp + rename): parallel simulator runs read these
+        import os
+        tmp = '%s.%d' % (path, os.getpid())
+        open(tmp, 'w').write('%X\n%s\n' % (self.base, ' '.join('%06X' % x for x in self.w)))
+        if os.path.exists(path) and open(path).read() == open(tmp).read():
+            os.remove(tmp)          # unchanged: don't touch it (Windows can't replace a file another run has open)
+        else:
+            os.replace(tmp, path)

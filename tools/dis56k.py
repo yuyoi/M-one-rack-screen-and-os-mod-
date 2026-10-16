@@ -320,7 +320,7 @@ def single_text(o, w, ext, pc):
         return ('MOVE %s,%s' % (m, r)) if f('W') else ('MOVE %s,%s' % (r, m)), 2
     if n in ('Movex_Rnxxx', 'Movey_Rnxxx'):
         spc = 'X' if n[4] == 'x' else 'Y'
-        m = '%s:(R%d%+d)' % (spc, f('R'), sx(f('a'), 7)); r = REG5.get(f('D') | 0x10 if f('D') >= 8 else f('D') | 4, '?')
+        m = '%s:(R%d%+d)' % (spc, f('R'), sx(f('a'), 7)); r = REG5.get(f('D'), '?')   # DDDD = the 5-bit code without its leading 0 (FM table 12-15)
         return ('MOVE %s,%s' % (m, r)) if f('W') else ('MOVE %s,%s' % (r, m)), 1
     if n.startswith(('Do_', 'Dor_', 'Rep_')) or n in ('DoForever', 'DorForever'):
         base = n.split('_')[0].upper().replace('DOFOREVER', 'DO FOREVER').replace('DORFOREVER', 'DOR FOREVER')

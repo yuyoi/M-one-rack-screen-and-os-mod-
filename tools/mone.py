@@ -5,7 +5,7 @@
   py -3.10 mone_dump.py check out.bin      # sanity-check a saved dump
   py -3.10 mone_dump.py COM7 wifi          # store WiFi SSID/password on the ESP (asks, password hidden)
   py -3.10 mone_dump.py ota [mone.local]   # build + flash the firmware over WiFi
-  py -3.10 mone_dump.py COM7 boot [dspdir]  # load autotune.hex + vocal.hex + os.hex + codec_on.hex over J8, codec on + outputs unmuted, then the OS
+  py -3.10 mone_dump.py COM7 boot [dspdir]  # load autotune.hex + vocal.hex (+ its SRAM tables) + os.hex + codec_on.hex over J8, codec on + outputs unmuted, then the OS
 Any COM7 above can be socket://mone.local:23 (or socket://<ip>:23): the same serial line over WiFi, no USB.
 """
 import hashlib
@@ -99,7 +99,7 @@ def main():
     if a[1] == 'boot':  # boot [dspdir]: load autotune + os + codec_on, start codec_on (it starts the OS); needs the stock boot first
         d = a[2] if len(a) > 2 else os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'dsp')
         start = None
-        for name in ('autotune.hex', 'vocal.hex', 'os.hex', 'codec_on.hex'):  # last one loaded is the start address
+        for name in ('autotune.hex', 'vocal.hex', 'vocal_tab.hex', 'vocal2.hex', 'os.hex', 'codec_on.hex'):  # last one = start address
             lines = open(os.path.join(d, name)).read().split('\n')
             s.write(b'L%06X %s\n' % (int(lines[0], 16), lines[1].strip().encode()))
             start = int(lines[0], 16)

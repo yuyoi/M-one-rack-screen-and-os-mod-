@@ -214,6 +214,12 @@ class Sim:
         if n == 'Neg': self.setacc(D, -a); return
         if n == 'Asl_D': self.setacc(D, a << 1, carry=(a >> 55) & 1); return
         if n == 'Asr_D': self.setacc(D, a >> 1, carry=a & 1); return
+        if n in ('Lsl_D', 'Lsr_D'):          # A1 only, C = the bit shifted out
+            a1 = (a >> 24) & M24
+            c = a1 >> 23 if n == 'Lsl_D' else a1 & 1
+            r = ((a1 << 1) if n == 'Lsl_D' else (a1 >> 1)) & M24
+            self.put(D + '1', r); self.ccr['C'] = c; self.ccr['N'] = r >> 23; self.ccr['Z'] = int(r == 0); self.ccr['V'] = 0
+            return
         if n in ('Mpy_S1S2D', 'Mac_S1S2', 'Mpyr_S1S2D', 'Macr_S1S2'):
             q = ['X0,X0', 'Y0,Y0', 'X1,X0', 'Y1,Y0', 'X0,Y1', 'Y0,X0', 'X1,Y0', 'Y1,X1'][o.f(w, 'Q')].split(',')
             prod = (s24(self.r[q[0]]) * s24(self.r[q[1]])) << 1
@@ -342,13 +348,22 @@ class Sim:
             if f('W'): self.put(reg, self.rd('P', addr))
             else: self.wr('P', addr, self.get(reg))
             return pc + 1 + used
-        if n in ('Add_xx', 'Sub_xx', 'Cmp_xxS2', 'Add_xxxx', 'Sub_xxxx', 'Cmp_xxxxS2', 'And_xxxx', 'Or_xxxx', 'And_xx', 'Or_xx'):
+        if n in ('Movex_Rnxxx', 'Movey_Rnxxx'):  # X/Y:(Rn+disp7)
+            d = f('a'); d = d - 128 if d >> 6 else d
+            reg = REG5[f('D')]                  # DDDD: X0..Y1 = 01DD, accumulators = 1DDD
+            addr = (self.R[f('R')] + d) & M24
+            sp = 'X' if n[4] == 'x' else 'Y'
+            if f('W'): self.put(reg, self.rd(sp, addr))
+            else: self.wr(sp, addr, self.get(reg))
+            return nxt
+        if n in ('Add_xx', 'Sub_xx', 'Cmp_xxS2', 'Add_xxxx', 'Sub_xxxx', 'Cmp_xxxxS2', 'And_xxxx', 'Or_xxxx', 'And_xx', 'Or_xx',
+                 'Eor_xxxx', 'Eor_xx'):
             D = 'AB'[f('d')]
             used = 1 if 'xxxx' in n else 0
             imm = ext if used else f('i')
-            if n.startswith(('And', 'Or')):
+            if n.startswith(('And', 'Or', 'Eor')):
                 a1 = (self.acc[D] >> 24) & M24
-                r = (a1 & imm) if n.startswith('And') else (a1 | imm)
+                r = (a1 & imm) if n.startswith('And') else (a1 ^ imm) if n.startswith('Eor') else (a1 | imm)
                 self.put(D + '1', r); self.ccr['N'] = r >> 23; self.ccr['Z'] = int(r == 0); self.ccr['V'] = 0
                 return pc + 1 + used
             s = s24(imm) << 24 if used else imm << 24

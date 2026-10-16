@@ -28,6 +28,9 @@ N_HI, N_LO = 88, 36
 NN = N_HI - N_LO + 1
 SPEED = int(0.002 * (1 << 23))       # retune per frame (~11 ms): robotic-ish; 0.0002 = natural
 RING, DARR, SHBUF = 0x0400, 0x0800, 0x030000
+SPLIT = 4                            # AMDF lag spread over 4 frames (worst case ~+1325 -> ~+400 cycles)
+SUB, R0S, R4S, PSUM = 0x0890, 0x0891, 0x0892, 0x0893   # X long: split phase, saved pointers, partial sum
+DETF = 0x0894                        # X long: detector ran this frame (the kernel clears it every frame)
 
 # X short state
 W_, D_, ACC, PH, IDX, ST, HOP, TAU, BS, ET, ES, SPD, _, PF, NOTE, _V, CUM, FOUND, BK, BD, LOCK, OUT, T1, DT, T2 = range(25)
@@ -82,6 +85,8 @@ def movem_ld(e, reg): a.op('Movem_ea', W=1, d=R6[reg], **ea(e))
 def nop(): a.word(0)
 def rts(): a.word(0x00000C)
 def j(c, lbl): a.jshort(c, lbl)
+def ldl(addr, reg): a.par(move=('Movex_ea', dict(W=1, d=R5[reg], M=6, R=0)), ext=addr)   # X:$long
+def stl(reg, addr): a.par(move=('Movex_ea', dict(W=0, d=R5[reg], M=6, R=0)), ext=addr)
 
 
 # ============================================================ tables (P memory, read with MOVEM)
@@ -118,6 +123,7 @@ a.label('tune_init')
 clr('A')
 for v in range(0x00, 0x20): stx('A', v)
 for v in range(SNAP, SNAP + 12): stx('A', v)
+stl('A', SUB)                                       # AMDF split: no lag in progress
 li('A', SPEED); stx('A', SPD)
 clr('A')
 li('R1', RING); li('B', 1024)
@@ -133,6 +139,14 @@ rts()
 a.label('fx_tune')
 # --- shifter write: buf[w] = x
 ldx(W_, 'A'); ori(SHBUF, 'A'); mv('A1', 'R5'); nop(); stxi('X1', '(R5)')
+a.jsr('tune_detect')
+a.jmp('tune_post')
+
+# ============================================================ tune_detect (X1 = input): pitch detector, at most once
+# per frame (the kernel clears DETF every frame), so TUNE, FORMANT and OCTAVE can all call it. Readout: X:$0D period.
+a.label('tune_detect')
+ldl(DETF, 'A'); tst('A'); j('NE', 'det_done')
+li('A', 1); stl('A1', DETF)
 # --- decimation: acc += x >> 11 ; every 4th sample -> ring
 mv('X1', 'B'); asr(11, 'B'); ldx(ACC, 'A'); add('B', 'A'); stx('A', ACC)
 ldx(PH, 'A'); addi(1, 'A'); cmpi(4, 'A'); j('NE', 'dec_ph')
@@ -157,18 +171,29 @@ j('T', 'det_done')
 
 a.label('st_nz')
 cmpi(1, 'A'); j('NE', 'st_eval')
-# state 1: one AMDF lag per frame
+# state 1: one AMDF lag per SPLIT frames, NWIN/SPLIT samples each (worst case per frame / SPLIT).
+# Same sums in the same order, so D[k] is bit-identical to the one-frame version. Partial sums stay < 1 and A0 = 0,
+# so A1 alone carries them between frames.
+ldl(SUB, 'B'); tst('B'); j('NE', 'am_cont')
 ldx(BS, 'A'); ori(RING, 'A'); mv('A1', 'R0')
 ldx(BS, 'A'); ldx(TAU, 'X0'); add('X0', 'A'); andi(0x3FF, 'A'); ori(RING, 'A'); mv('A1', 'R4')
+clr('A'); j('T', 'am_run')
+a.label('am_cont')
+ldl(R0S, 'R0'); ldl(R4S, 'R4'); ldl(PSUM, 'A')
+a.label('am_run')
 movec('M0', 0x3FF); movec('M4', 0x3FF)
-clr('A')
-a.do(NWIN, 'amdf_end')
+a.do(NWIN // SPLIT, 'amdf_end')
 a.par(move=('Movexy', dict(W=1, w=1, e=3, f=0, M=3, R=0, m=3, r=0)))   # B = X:(R0)+ ; Y0 = Y:(R4)+
 sub('Y0', 'B')
 abs_('B')
 add('B', 'A')
 a.label('amdf_end')
 movec('M0', 0xFFFFFF); movec('M4', 0xFFFFFF)
+ldl(SUB, 'B'); addi(1, 'B'); cmpi(SPLIT, 'B'); j('EQ', 'am_done')
+stl('B1', SUB); stl('R0', R0S); stl('R4', R4S); stl('A1', PSUM)
+j('T', 'det_done')
+a.label('am_done')
+clr('B'); stl('B', SUB)
 ldx(TAU, 'B'); subi(TMIN, 'B'); ori(DARR, 'B'); mv('B1', 'R2'); nop()
 stxi('A', '(R2)')                                   # D[k]
 mv('A', 'X0')
@@ -263,6 +288,9 @@ a.op('Cmp_xxxxS2', ext=0xE00000, d=0); j('GE', 'e_lo'); li('A', 0xE00000)
 a.label('e_lo')
 stx('A', ET)
 a.label('det_done')
+rts()
+
+a.label('tune_post')
 
 # --- retune: es += spd*(et - es)
 ldx(ET, 'A'); ldx(ES, 'X0'); sub('X0', 'A'); mv('A', 'X1')

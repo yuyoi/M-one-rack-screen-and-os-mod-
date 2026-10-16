@@ -89,10 +89,21 @@ python codec_on.py                      # writes codec_on.hex (P:$0900): codec o
 python ../tools/mone.py COMx boot       # loads all four over J8, verifies, starts codec_on -> kernel
                                         # then the ESP sends its panel state, so the sound matches the screen
 ```
-Effects: CLEAN, HEAVY, REVERSE, COMP, TUNE (autotune), VOX (vocal chain). Modes: SINGLE, DOUBLE (parallel),
-DBL-SINGLE (series).
+Effects: CLEAN, HEAVY, REVERSE, COMP, TUNE (autotune), VOX (vocal chain), RADIO (6 lo-fi modes), FORMANT and OCTAVE
+(PSOLA). Modes: SINGLE, DOUBLE (parallel), DBL-SINGLE (series). Parameter addresses: `VOCAL_ARCH.md` in the FX lab
+notes; `boot` loads autotune, vocal (+ vocal_tab in SRAM), vocal2, os and codec_on.
 `python model/sim_os_tune.py 215` runs the whole OS in the simulator with FX 1 = TUNE (expect A3, within a few cents).
 `python model/sim_vox.py` does the same with FX 1 = VOX and compares it with `model/vox_model.py` (expect ~1e-7).
+`python model/sim_radio.py MODE` (0-5) and `python model/sim_psola.py 8 1.0 0.78` (FORMANT) / `9 0.5 1.0` (OCTAVE)
+compare RADIO and the PSOLA engine with their models (expect ~2e-7 and 0 LSB). `python ../tools/fxmeter.py PORT 4 7 8 9`
+boots meter builds with the outputs muted and prints each effect's worst cycles per frame on the hardware.
+
+**RADIO** modes (X:$0210): TELEPHONE (300-3400 Hz, 8 kHz sample-and-hold), MEGAPHONE (horn peak, hard breakup,
+0.5 ms horn comb), AM RADIO (boxy, static + crackle), WALKIE (narrow, crushed, squelch "kshh" when you stop),
+CASSETTE (head bump, tape saturation, wow + flutter, hiss), VINYL 78 (gramophone band, crackle, 78 rpm wow).
+**FORMANT** moves the formants and keeps the pitch (GIANT 0.78, CHIPMUNK 1.35); **OCTAVE** drops the pitch an octave
+and keeps the formants. Both use TUNE's pitch detector (now spread over 4 frames: TUNE's worst case went from ~1410
+to ~670 cycles per frame).
 
 **VOX** is a vocal chain voiced for a crystal/ceramic ham mic (D-104 style): HPF 80 Hz, +5 dB body at 180 Hz,
 -4 dB at 1 kHz (honk) and 3.5 kHz (crystal peak), a leveling compressor, light tube saturation, an exciter (the

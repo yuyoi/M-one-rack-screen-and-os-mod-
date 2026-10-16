@@ -3,7 +3,8 @@
 Params (X short, written live by the ESP over J8):
   X:$20 mode   0 = SINGLE (FX1)   1 = DOUBLE (FX1 || FX2, mixed)   2 = DOUBLE-SINGLE (FX1 -> FX2)
   X:$21 FX1    X:$22 FX2   effect ids: 0 clean, 1 heavy, 2 reverse, 3 comp, 4 tune (autotune.py at P:$400),
-                           5 vox (vocal.py at P:$700: load vocal.hex too)
+                           5 vox, 6 amp (= clean for now), 7 radio (vocal.py: load vocal.hex + vocal_tab.hex too),
+                           8 formant, 9 octave (vocal2.py: load vocal2.hex too)
   tune: X:$0B retune speed (Q23 per sample), X:$23-$2E snap map (signed semitones per pitch class, 0 = chromatic)
   output stage (the pots, after every mode): X:$2F dry gain, X:$3D wet gain (mix: the ESP sends 1-m and m),
     X:$3E tone k (one-pole low-pass, $7FFFFF = off), X:$3C volume; X:$3F = tone filter state
@@ -23,7 +24,8 @@ from dis56k import listing  # noqa: E402
 sys.path.insert(0, HERE)
 import autotune  # noqa: E402  (assembles it: we only need its entry points)
 TUNE_INIT, FX_TUNE = autotune.a.labels['tune_init'], autotune.a.labels['fx_tune']
-import vocal  # noqa: E402  (vocal.py at P:$0700: VOX)
+import vocal  # noqa: E402  (vocal.py at P:$0100: VOX, RADIO; its tables: vocal_tab.hex in external SRAM)
+import vocal2  # noqa: E402  (vocal2.py at P:$0700: PSOLA = FORMANT, OCTAVE)
 
 BASE = 0xA00
 METER = 'meter' in sys.argv[1:]        # py os.py meter: histogram of idle spins per frame at X:$1100-$11FF
@@ -59,6 +61,7 @@ for m in range(8):                      # m0..m7 linear (TC leaves m0 as a modul
     w(0x05F420 | m, 0xFFFFFF)
 w(0x0BF080, TUNE_INIT)                  # jsr tune_init (clears its buffers, default speed, chromatic)
 w(0x0BF080, vocal.VOX_INIT)             # jsr vox_init (vocal.py: state, slap buffer, coefficients)
+w(0x0BF080, vocal2.VOCAL2_INIT)         # jsr vocal2_init (PSOLA instances, rings, params)
 w(0x64F400, 0x020000, 0x200013)         # r4 = $020000 ; clr a
 w(0x57F400, 0x010000)                   # b = 65536
 L('clr')
@@ -88,6 +91,7 @@ else:
     ext(0x01B388, 'loop')               # jclr #8,x:SAISR,loop
 w(0x0445C9)                             # movep x:RX1,x1
 ext(0x01B3A6, 'left')                   # jset #6,x:SAISR,left
+w(0x20001B, 0x577000, autotune.DETF)    # clr b ; move b,x:DETF  (new frame: the pitch detector may run once)
 if METER:
     w(0x23EF00, 0x20000B)               # b = n7 ; tst b
     jcc(0x0EA000, 'm_on')               # jeq: warm-up done
@@ -134,8 +138,12 @@ ext(0x0AF080, 'loop')
 # ---------------- effect table
 L('table')
 data('fx_clean'); data('fx_heavy'); data('fx_rev'); data('fx_comp'); data('fx_tune'); data('fx_vox')
+data('fx_clean')                       # 6 = AMP (research session, P:$0C00): CLEAN until it is loaded
+data('fx_radio'); data('fx_formant'); data('fx_octave')
 labels['fx_tune'] = FX_TUNE
 labels['fx_vox'] = vocal.FX_VOX
+labels['fx_radio'] = vocal.FX_RADIO
+labels['fx_formant'], labels['fx_octave'] = vocal2.FX_FORMANT, vocal2.FX_OCTAVE
 
 # ---------------- clean
 L('fx_clean')
@@ -204,4 +212,9 @@ end = BASE + len(p) - 1
 assert end <= 0xBFF, 'kernel runs into P:$0C00 (kept for the amp sim): %X' % end
 print(listing(p, base=BASE))
 print('words=%d  end=P:%04X  labels=%s' % (len(p), end, {k: '%04X' % v for k, v in labels.items() if k.startswith(('fx', 'table'))}))
-open(os.path.join(HERE, 'os_meter.hex' if METER else 'os.hex'), 'w').write('%X\n%s\n' % (BASE, ' '.join('%06X' % x for x in p)))
+_out = os.path.join(HERE, 'os_meter.hex' if METER else 'os.hex')   # atomic: parallel simulator runs read it
+open(_out + '.%d' % os.getpid(), 'w').write('%X\n%s\n' % (BASE, ' '.join('%06X' % x for x in p)))
+if not os.path.exists(_out) or open(_out).read() != open(_out + '.%d' % os.getpid()).read():
+    os.replace(_out + '.%d' % os.getpid(), _out)
+else:
+    os.remove(_out + '.%d' % os.getpid())

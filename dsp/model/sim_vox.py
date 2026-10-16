@@ -19,24 +19,14 @@ def hexwords(name):
     return int(tk[0], 16), [int(v, 16) for v in tk[1:]]
 
 
-with contextlib.redirect_stdout(io.StringIO()):
-    labels = runpy.run_path(os.path.join(HERE, '..', 'os.py'))['labels']
-    runpy.run_path(os.path.join(HERE, '..', 'vocal.py'), run_name='__main__')
 
 x = np.concatenate([am.voice(220, 0.6, vib=0.3) * 2.0, np.zeros(int(0.35 * FS)), am.voice(330, 0.3) * 0.08])
 xi = np.round(x / 2 * (Q - 1)).astype(int)                  # L = R = x/2: the kernel sums them
 xs = 2 * xi / Q
 
-ob, ow = hexwords('os.hex')
-s = Sim(ow, ob)
-for name in ('autotune.hex', 'vocal.hex'):
-    b, w = hexwords(name)
-    s.P.update({b + i: v for i, v in enumerate(w)})
-s.pc = ob
 t = time.time()
-while s.pc != labels['loop']:
-    s.step()
-s.X[0x20], s.X[0x21] = 0, 5                                 # SINGLE, FX1 = VOX
+from sim_radio import boot_os                               # the OS as `boot` loads it (+ vocal_tab.hex)
+s = boot_os(5)                                              # SINGLE, FX1 = VOX
 out, worst = s.run_audio(list(xi), list(xi), max_instr_per_frame=100000)
 y = np.array(out[1::2], float) / Q                          # the sim records signed TX1 words
 ref = vm.Vox(exact=True).run(xs)
