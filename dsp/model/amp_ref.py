@@ -7,7 +7,6 @@ bias minus dynamic bias, clamp, cubic soft clip u + (u - u^3)/2, Miller LPF) -> 
 cab IR -> master.
 """
 import numpy as np
-import scipy.signal as ss
 import amp_model as am
 
 FS, OS, Q = 44100, 4, 1 << 23
@@ -35,33 +34,41 @@ def fir():
 
 
 def tmb_sos(l=0.5, m=0.5, t=0.6, comp='marshall'):
-    """Tone stack as a biquad (coefficients /2, -a1/2, -a2/2) + first order (c0, c1, -d1)."""
-    b, a = am.tmb(l, m, t, comp)
-    sos = ss.tf2sos(b, a)
-    first = [s for s in sos if abs(s[2]) < 1e-12 and abs(s[5]) < 1e-12]
-    second = [s for s in sos if not (abs(s[2]) < 1e-12 and abs(s[5]) < 1e-12)]
-    if not first:                             # tf2sos padded the order: split the real pole out ourselves
-        z, p, k = ss.tf2zpk(b, a)
-        pr = p[np.argmin(np.abs(p.imag))].real
-        zr = z[np.argmin(np.abs(z.imag))].real
-        rest_p = np.delete(p, np.argmin(np.abs(p.imag)))
-        rest_z = np.delete(z, np.argmin(np.abs(z.imag)))
-        bq, aq = ss.zpk2tf(rest_z, rest_p, k)
-        second = [np.concatenate([bq, aq])]
-        first = [np.array([1, -zr, 0, 1, -pr, 0])]
-    s2, s1 = second[0], first[0]
-    bq = np.array([s2[0], s2[1], s2[2], -s2[4], -s2[5]]) / 2
-    f1 = np.array([s1[0], s1[1], -s1[4]])
-    # keep the biquad's numerator inside Q23 (/2 domain): move gain into the first-order section
-    g = max(1.0, np.max(np.abs(bq[:3])) / 0.95)
-    bq[:3] /= g
-    f1[:2] *= g
-    return q(bq), q(f1)
+    """Tone stack as a biquad (b0 b1 b2 -a1 -a2, all /2) + first order (h, -h, pole). Plain arithmetic, no library
+    root finder: the ESP runs the same steps (menu.h ampTmb) and must land on the same words.
+    Bilinear of Yeh's cubic, the largest real pole by Newton from z = 1, the DC zero (z = 1) goes with that pole
+    into the first-order section, the rest is the biquad. Over the whole knob range: |b| <= 1.79, |a| <= 1.79,
+    poles >= 0.987, biquad gain <= 1.0. MID is held <= 0.99: at MID 1 / BASS 0 a pole sits on z = -1."""
+    b1, b2, b3, a1, a2, a3 = am.tmb_analog(l, min(m, 0.99), t, comp)
+    c = 2.0 * FS
+    c2, c3 = c * c, c * c * c
+    a0 = a3 * c3 + a2 * c2 + a1 * c + 1
+    B0 = (b3 * c3 + b2 * c2 + b1 * c) / a0
+    B1 = (-3 * b3 * c3 - b2 * c2 + b1 * c) / a0
+    B2 = (3 * b3 * c3 - b2 * c2 - b1 * c) / a0
+    A1 = (-3 * a3 * c3 - a2 * c2 + a1 * c + 3) / a0
+    A2 = (3 * a3 * c3 - a2 * c2 - a1 * c + 3) / a0
+    A3 = (-a3 * c3 + a2 * c2 - a1 * c + 1) / a0
+    p = 1.0
+    for _ in range(60):
+        st = (((p + A1) * p + A2) * p + A3) / ((3 * p + 2 * A1) * p + A2)
+        p -= st
+        if abs(st) < 1e-15:
+            break
+    e1 = A1 + p                               # z^3 + A1 z^2 + A2 z + A3 = (z - p)(z^2 + e1 z + e2)
+    e2 = A2 + p * e1
+    g1 = B1 + B0                              # B(z) = (1 - z^-1)(B0 + g1 z^-1 + g2 z^-2)
+    g2 = B2 + g1
+    h = (Q - 1) / Q                           # first-order gain as high as Q23 goes: the biquad stays below 1
+    bq = np.array([B0 / h, g1 / h, g2 / h, -e1, -e2]) / 2
+    return q(bq), q([h, -h, p])
 
 
-def peq_coefs():
+def peq_coefs(resonance=3, presence=3):
+    """RESONANCE = peak at 100 Hz Q 1.2, PRESENCE = wide peak at 3 kHz Q 0.5 (a shelf needs b0 > 2 above +3 dB, which
+    the /2 format can't hold; after the cab's roll-off the wide peak acts like one). Both fit for -12..+12 dB."""
     out = []
-    for b, a in (am.peq(100, 3, 1.2), am.peq(3000, 3, 0.7, 'shelf')):
+    for b, a in (am.peq(100, resonance, 1.2), am.peq(3000, presence, 0.5)):
         out.append(q(np.array([b[0], b[1], b[2], -a[1], -a[2]]) / 2))
     return out
 
@@ -96,6 +103,32 @@ def params(p=PRESET):
     w[37] = 1 - np.exp(-1 / (0.150 * FS))               # sag release 150 ms
     w[38] = p['master']
     return q(w)
+
+
+# ---------------------------------------------------------------- the panel's AMP page (firmware menu.h ampFill)
+AMP_TYPES = ('CLEAN', 'CRUNCH', 'LEAD')                 # voicing: stage gains (dB) + tone-stack components
+AMP_G = ((6, 0, -6), (20, 12, 0), (30, 24, 12))
+AMP_COMP = ('bassman', 'marshall', 'marshall')
+
+
+def ui_words(typ, gain, bass, mid, treble, presence, resonance, drive, sag, master):
+    """The 24 words the panel writes for its AMP rows, {X address: 24-bit word}. gain / bass / mid / treble 0..100,
+    presence / resonance / drive in dB, sag / master in %. GAIN 70 = the type's own stage gains; each step of 1 moves
+    stages 1 and 2 by 0.25 dB (each held <= 30 dB, the /32 format's limit)."""
+    w = {}
+    for s in range(3):
+        g = min(AMP_G[typ][s] + ((gain - 70) * 0.25 if s < 2 else 0), 30)
+        w[s] = 10 ** (g / 20) / 32
+    bq, f1 = tmb_sos(bass / 100, mid / 100, treble / 100, AMP_COMP[typ])
+    pe = peq_coefs(resonance, presence)
+    for i in range(5):
+        w[16 + i], w[24 + i], w[29 + i] = bq[i], pe[0][i], pe[1][i]
+    for i in range(3):
+        w[21 + i] = f1[i]
+    w[34] = 10 ** (drive / 20) / 8
+    w[35] = sag / 100
+    w[38] = master / 100
+    return {0x12C0 + k: int(q(v) * Q) & 0xFFFFFF for k, v in w.items()}
 
 
 # ---------------------------------------------------------------- reference (mirrors the DSP code)

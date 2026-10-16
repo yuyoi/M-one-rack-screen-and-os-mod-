@@ -332,9 +332,11 @@ static void tuneSend() {
 }
 
 // ---- Pots -> the kernel's output stage (normal / vocal mode): POT1 volume, POT2 dry/wet mix, POT3 tone.
-// (A later pedal mode can hand the three pots to the effect itself.)
+// Pedal mode (AMP playing): POT1 volume, POT2 / POT3 = AMP's GAIN / TREBLE (potsToDsp), the mix all wet, tone open.
 static const uint8_t POT_AA[4] = {0x2F, 0x3D, 0x3E, 0x3C};   // dry gain, wet gain, tone k, volume (dsp/os.py)
 static int potSent[3] = {-9999, -9999, -9999};
+static bool potAmp = false;                  // the last pot words went out in pedal mode
+static bool fxInPath(int fx);
 
 static uint32_t q23(float x) { return (uint32_t)lroundf(constrain(x, 0.0f, 0.99999988f) * 8388608.0f) & 0xFFFFFF; }
 
@@ -344,16 +346,17 @@ static void potFill(const int *mv, uint32_t *v) {
   float vol = p[0] < 0.02f ? 0.0f : powf(10.0f, 2.0f * (p[0] - 1.0f));      // 40 dB audio taper, far left = off
   float fc = 400.0f * powf(50.0f, p[2]);                                     // tone: 400 Hz .. 20 kHz low-pass
   float k = p[2] > 0.97f ? 1.0f : 1.0f - expf(-6.2831853f * fc / 44100.0f);  // far right = no filter
-  v[0] = q23(1.0f - p[1]);                   // linear crossfade: CLEAN stays at the same level at any mix
-  v[1] = q23(p[1]);
-  v[2] = q23(k);
+  bool amp = fxInPath(6);
+  v[0] = amp ? 0 : q23(1.0f - p[1]);         // linear crossfade: CLEAN stays at the same level at any mix
+  v[1] = amp ? 0x7FFFFF : q23(p[1]);
+  v[2] = amp ? 0x7FFFFF : q23(k);
   v[3] = q23(vol);
 }
 
 // ---- Effect settings: long X writes into each effect's param block (VOCAL_ARCH.md "Param maps"). T5 = EDIT page.
 // A row with addr 0 is a UI-only preset row (VOICE / TYPE): it sets the rows under it; hand-tuning those = CUSTOM.
 enum { PK_ENUM, PK_PCT, PK_TRIM, PK_SEMI, PK_RATIO, PK_GAIN, PK_INV, PK_TICKS, PK_INT, PK_HZ, PK_MS44, PK_HZ44,
-       PK_SHIFT, PK_DB, PK_RISE, PK_MK, PK_DRV, PK_SDB, PK_POW2 };
+       PK_SHIFT, PK_DB, PK_RISE, PK_MK, PK_DRV, PK_SDB, PK_POW2, PK_KNOB };
 static uint32_t q23s(double x) {             // signed Q23 (24-bit two's complement)
   return (uint32_t)llround(constrain(x, -1.0, 0.99999988) * 8388608.0) & 0xFFFFFF;
 }
@@ -431,9 +434,90 @@ static FxParam grainP[] = {
   {"SCATTER", 0x02C3, PK_ENUM, 1, 0, 1, OFF_ON}, {"WET", 0x02C4, PK_PCT, 80, 0, 100, nullptr},
   {"DRY", 0x02C5, PK_PCT, 40, 0, 100, nullptr}};
 static uint32_t grainDph() { return q23(1.0f / (grainP[0].v * 441 / 10)); }   // 1 / L
+// AMP X:$12C0 (dsp/amp.py; the words = dsp/model/amp_ref.ui_words, checked with the serial 'a' command). TYPE = the
+// voicing (stage gains, Fender or Marshall tone stack) and loads its starting knobs. GAIN 70 = the type's own gains,
+// each step moves stages 1 + 2 by 0.25 dB. With AMP playing, POT2 = GAIN and POT3 = TREBLE (pedal mode, potsToDsp).
+static const char *const AMP_TYPES[] = {"CLEAN", "CRUNCH", "LEAD"};
+static const int AMP_G[3][3] = {{6, 0, -6}, {20, 12, 0}, {30, 24, 12}};                  // stage gains, dB
+static const int AMP_PRE[3][5] = {{50, 60, 60, -6, 30}, {50, 50, 60, 0, 50}, {60, 30, 70, 3, 60}};   // B M T DRV SAG
+static FxParam ampP[] = {                     // CRUNCH = the defaults AMP loads itself (amp_ref.PRESET)
+  {"TYPE", 0, PK_ENUM, 1, 0, 2, AMP_TYPES}, {"GAIN", 0, PK_KNOB, 70, 0, 100, nullptr},
+  {"BASS", 0, PK_KNOB, 50, 0, 100, nullptr}, {"MID", 0, PK_KNOB, 50, 0, 100, nullptr},
+  {"TREBLE", 0, PK_KNOB, 60, 0, 100, nullptr}, {"PRESENCE", 0, PK_SDB, 3, -12, 12, nullptr},
+  {"RESONANCE", 0, PK_SDB, 3, 0, 12, nullptr}, {"DRIVE", 0, PK_SDB, 0, -12, 18, nullptr},
+  {"SAG", 0, PK_PCT, 50, 0, 90, nullptr}, {"MASTER", 0, PK_PCT, 70, 0, 100, nullptr}};
+enum { AG_GAIN = 1, AG_TMB = 2, AG_RES = 4, AG_PRES = 8, AG_DRV = 16, AG_SAG = 32, AG_MST = 64, AG_ALL = 127 };
+static const uint8_t AMP_ROW_G[10] = {AG_ALL, AG_GAIN, AG_TMB, AG_TMB, AG_TMB, AG_PRES, AG_RES, AG_DRV, AG_SAG, AG_MST};
+
+// Tone stack (amp_ref.tmb_sos, the same steps in the same order): Yeh & Smith's cubic, bilinear, the largest real pole
+// by Newton from z = 1 -> first order (h, -h, pole) with the DC zero, the rest -> biquad b0 b1 b2 -a1 -a2, all /2.
+// MID is held <= 0.99: at MID 1 / BASS 0 a pole sits on z = -1.
+static int ampTmb(uint16_t *aa, uint32_t *w, int n) {
+  double C1 = 470e-12, C2 = 22e-9, C3 = 22e-9, R1 = 220e3, R2 = 1e6, R3 = 22e3, R4 = 33e3;     // Marshall
+  if (ampP[0].v == 0) { C1 = 250e-12; C2 = 20e-9; C3 = 20e-9; R1 = 250e3; R2 = 1e6; R3 = 25e3; R4 = 56e3; }   // Fender
+  double l = ampP[2].v / 100.0, m = min(ampP[3].v / 100.0, 0.99), t = ampP[4].v / 100.0;
+  double b1 = t*C1*R1 + m*C3*R3 + l*(C1*R2 + C2*R2) + (C1*R3 + C2*R3);
+  double b2 = (t*(C1*C2*R1*R4 + C1*C3*R1*R4) - m*m*(C1*C3*R3*R3 + C2*C3*R3*R3)
+               + m*(C1*C3*R1*R3 + C1*C3*R3*R3 + C2*C3*R3*R3) + l*(C1*C2*R1*R2 + C1*C2*R2*R4 + C1*C3*R2*R4)
+               + l*m*(C1*C3*R2*R3 + C2*C3*R2*R3) + (C1*C2*R1*R3 + C1*C2*R3*R4 + C1*C3*R3*R4));
+  double b3 = (l*m*(C1*C2*C3*R1*R2*R3 + C1*C2*C3*R2*R3*R4) - m*m*(C1*C2*C3*R1*R3*R3 + C1*C2*C3*R3*R3*R4)
+               + m*(C1*C2*C3*R1*R3*R3 + C1*C2*C3*R3*R3*R4) + t*C1*C2*C3*R1*R3*R4 - t*m*C1*C2*C3*R1*R3*R4
+               + t*l*C1*C2*C3*R1*R2*R4);
+  double a1 = (C1*R1 + C1*R3 + C2*R3 + C2*R4 + C3*R4) + m*C3*R3 + l*(C1*R2 + C2*R2);
+  double a2 = (m*(C1*C3*R1*R3 - C2*C3*R3*R4 + C1*C3*R3*R3 + C2*C3*R3*R3) + l*m*(C1*C3*R2*R3 + C2*C3*R2*R3)
+               - m*m*(C1*C3*R3*R3 + C2*C3*R3*R3) + l*(C1*C2*R2*R4 + C1*C2*R1*R2 + C1*C3*R2*R4 + C2*C3*R2*R4)
+               + (C1*C2*R1*R4 + C1*C3*R1*R4 + C1*C2*R3*R4 + C1*C2*R1*R3 + C1*C3*R3*R4 + C2*C3*R3*R4));
+  double a3 = (l*m*(C1*C2*C3*R1*R2*R3 + C1*C2*C3*R2*R3*R4) - m*m*(C1*C2*C3*R1*R3*R3 + C1*C2*C3*R3*R3*R4)
+               + m*(C1*C2*C3*R3*R3*R4 + C1*C2*C3*R1*R3*R3 - C1*C2*C3*R1*R3*R4) + l*C1*C2*C3*R1*R2*R4
+               + C1*C2*C3*R1*R3*R4);
+  double c = 2.0 * 44100, c2 = c * c, c3 = c * c * c;
+  double a0 = a3 * c3 + a2 * c2 + a1 * c + 1;
+  double B0 = (b3 * c3 + b2 * c2 + b1 * c) / a0;
+  double B1 = (-3 * b3 * c3 - b2 * c2 + b1 * c) / a0;
+  double B2 = (3 * b3 * c3 - b2 * c2 - b1 * c) / a0;
+  double A1 = (-3 * a3 * c3 - a2 * c2 + a1 * c + 3) / a0;
+  double A2 = (3 * a3 * c3 - a2 * c2 - a1 * c + 3) / a0;
+  double A3 = (-a3 * c3 + a2 * c2 - a1 * c + 1) / a0;
+  double p = 1.0;
+  for (int i = 0; i < 60; i++) {
+    double st = (((p + A1) * p + A2) * p + A3) / ((3 * p + 2 * A1) * p + A2);
+    p -= st;
+    if (fabs(st) < 1e-15) break;
+  }
+  double e1 = A1 + p, e2 = A2 + p * e1, g1 = B1 + B0, g2 = B2 + g1, h = 8388607.0 / 8388608.0;
+  double bq[5] = {B0 / h, g1 / h, g2 / h, -e1, -e2};
+  for (int i = 0; i < 5; i++) { aa[n] = 0x12D0 + i; w[n++] = q23s(bq[i] / 2); }
+  aa[n] = 0x12D5; w[n++] = 0x7FFFFF;                       // first order: h, -h, pole
+  aa[n] = 0x12D6; w[n++] = 0x800001;
+  aa[n] = 0x12D7; w[n++] = q23s(p);
+  return n;
+}
+
+static int ampPeq(uint16_t a, double fc, double db, double qf, uint16_t *aa, uint32_t *w, int n) {   // RBJ peak, /2
+  double A = pow(10.0, db / 40.0), wv = 2 * PI * fc / 44100.0, al = sin(wv) / (2 * qf), cs = cos(wv), d0 = 1 + al / A;
+  double c[5] = {(1 + al * A) / d0, -2 * cs / d0, (1 - al * A) / d0, 2 * cs / d0, -(1 - al / A) / d0};
+  for (int i = 0; i < 5; i++) { aa[n] = a + i; w[n++] = q23s(c[i] / 2); }
+  return n;
+}
+
+static int ampFill(uint16_t *aa, uint32_t *w, int n, uint8_t g) {   // the AMP words of groups g (AG_ bits)
+  if (g & AG_GAIN)
+    for (int s = 0; s < 3; s++) {
+      double db = min(AMP_G[ampP[0].v][s] + (s < 2 ? (ampP[1].v - 70) * 0.25 : 0.0), 30.0);   // /32 format: <= 30 dB
+      aa[n] = 0x12C0 + s; w[n++] = q23s(pow(10.0, db / 20.0) / 32);
+    }
+  if (g & AG_TMB) n = ampTmb(aa, w, n);
+  if (g & AG_RES) n = ampPeq(0x12D8, 100, ampP[6].v, 1.2, aa, w, n);
+  if (g & AG_PRES) n = ampPeq(0x12DD, 3000, ampP[5].v, 0.5, aa, w, n);   // wide peak: a shelf overflows above +3 dB
+  if (g & AG_DRV) { aa[n] = 0x12E2; w[n++] = q23s(pow(10.0, ampP[7].v / 20.0) / 8); }
+  if (g & AG_SAG) { aa[n] = 0x12E3; w[n++] = q23s(ampP[8].v / 100.0); }
+  if (g & AG_MST) { aa[n] = 0x12E6; w[n++] = q23s(ampP[9].v / 100.0); }
+  return n;
+}
 struct FxParams { FxParam *p; int n; };
 
 static FxParams fxParams(int fx) {
+  if (fx == 6) return {ampP, 10};
   if (fx == 7) return {radioP, 4};
   if (fx == 8) return {formantP, 5};
   if (fx == 9) return {octaveP, 4};
@@ -537,7 +621,7 @@ static uint32_t paramWord(const FxParam &p) {
     case PK_RISE: return q23(1.0f / (p.v * 44.1f));                                // fade-in ms -> step per sample
     case PK_MK: return q23(p.v / 400.0f);                                          // makeup / 4
     case PK_DRV: return q23(p.v / 160.0f);                                         // drive / 16 (0 = off), v = x10
-    case PK_SDB: return 0;                                                         // shown only (the EQ rows)
+    case PK_SDB: case PK_KNOB: return 0;                                           // shown only (computed words)
   }
   return 0;
 }
@@ -555,13 +639,14 @@ static void paramText(const FxParam &p, char *s, size_t n) {
   else if (p.kind == PK_HZ44) snprintf(s, n, "%d.%02d HZ", p.v / 100, p.v % 100);
   else if (p.kind == PK_INT) snprintf(s, n, "%d", p.v);
   else if (p.kind == PK_HZ) snprintf(s, n, "%d.%d HZ", p.v / 10, p.v % 10);
+  else if (p.kind == PK_KNOB) snprintf(s, n, "%d.%d", p.v / 10, p.v % 10);       // amp knob 0.0 .. 10.0
   else snprintf(s, n, "%d%%", p.v);
 }
 
 static int paramStep(const FxParam &p) {          // per encoder step
   if (p.step) return p.step;
   if (p.kind == PK_RATIO) return 2;
-  return (p.kind == PK_PCT || p.kind == PK_TRIM || p.kind == PK_GAIN || p.kind == PK_INV) ? 5 : 1;
+  return (p.kind == PK_PCT || p.kind == PK_TRIM || p.kind == PK_GAIN || p.kind == PK_INV || p.kind == PK_KNOB) ? 5 : 1;
 }
 
 static int editCursor = 0;
@@ -580,6 +665,18 @@ static void editChange(int d) {
   FxParam &p = ps.p[editCursor];
   if (p.kind == PK_ENUM) p.v = wrapv(p.v - p.lo + d, p.hi - p.lo + 1) + p.lo;
   else p.v = constrain(p.v + d * paramStep(p), p.lo, p.hi);
+  if (fx == 6) {                                                // AMP: only the words of the group that changed
+    if (editCursor == 0) {                                      // TYPE: its starting knobs
+      static const uint8_t ROW[5] = {2, 3, 4, 7, 8};
+      for (int i = 0; i < 5; i++) ampP[ROW[i]].v = AMP_PRE[p.v][i];
+      ampP[1].v = 70;
+    }
+    uint16_t aa[24];
+    uint32_t w[24];
+    bool ok = onceWriteXLong(aa, w, ampFill(aa, w, 0, AMP_ROW_G[editCursor]));
+    displayStatus(ok ? "SENT TO DSP" : "DSP NOT ANSWERING", ok ? 0x30D060 : th::RED);
+    return;
+  }
   int span = presetSpan(fx);
   bool preset = span && editCursor == 0;
   if (preset && p.v < p.hi) presetRows(fx, p.v);                // VOICE / TYPE sets the rows under it
@@ -621,13 +718,14 @@ static void drawEdit(uint32_t now) {
   if (fx == 10) {                                         // HARMONY: its voices follow the TUNE page's key
     snprintf(v, sizeof v, "KEY %s %s (T2)", KEY_NAMES[menu.key], menu.scale == 2 ? "MINOR" : "MAJOR");
     statusOr(v);
-  } else statusOr("KNOB:EDIT T6/B6:MOVE");
+  } else if (fx == 6 && fxInPath(6)) statusOr("POT2:GAIN POT3:TREB");   // pedal mode
+  else statusOr("KNOB:EDIT T6/B6:MOVE");
 }
 
 // Every effect's settings in one halt (after a boot, with the rest of the panel state)
 static bool pushParams() {
-  uint16_t aa[112];
-  uint32_t w[112];
+  uint16_t aa[128];
+  uint32_t w[128];
   int n = 0;
   if (menu.mode == 3) {                                   // CHAIN: the list
     aa[n] = 0x0200; w[n++] = menu.chainN;
@@ -644,20 +742,66 @@ static bool pushParams() {
   aa[n] = 0x0287; w[n++] = revDd2();
   aa[n] = 0x02C0; w[n++] = grainDph();
   aa[n] = 0x0207; w[n++] = menu.strip;                    // STRIP on / off
+  n = ampFill(aa, w, n, AG_ALL);                          // AMP (its first call loads defaults: ampFollow)
   return onceWriteXLong(aa, w, n);
 }
 
 // From controlsTick (every 50 ms): send when a pot moved more than 40 mV, at most every 100 ms (each send is one
 // short halt of the DSP, so they are kept rare)
+// Pedal mode: a pot that moves takes over AMP's GAIN / TREBLE (its words go out in the same halt); until then the
+// EDIT page's values stay, so picking AMP never jumps.
 void potsToDsp(const int *mv) {
   static uint32_t last = 0;
-  bool moved = false;
-  for (int k = 0; k < 3; k++) if (abs(mv[k] - potSent[k]) > 40) moved = true;
-  if (!moved || millis() - last < 100 || !dspAwake || learnIdx >= 0) return;
+  bool amp = fxInPath(6), moved[3], any = amp != potAmp;
+  for (int k = 0; k < 3; k++) { moved[k] = abs(mv[k] - potSent[k]) > 40; any = any || moved[k]; }
+  if (!any || millis() - last < 100 || !dspAwake || learnIdx >= 0) return;
   last = millis();
-  uint32_t v[4];
+  uint16_t aa[16];
+  uint32_t w[16], v[4];
   potFill(mv, v);
-  if (onceWriteXMany(POT_AA, v, 4)) for (int k = 0; k < 3; k++) potSent[k] = mv[k];
+  for (int k = 0; k < 4; k++) { aa[k] = POT_AA[k]; w[k] = v[k]; }
+  int n = 4;
+  uint8_t g = 0;
+  if (amp && moved[1]) { ampP[1].v = constrain((mv[1] + 15) / 31, 0, 100); g |= AG_GAIN; }
+  if (amp && moved[2]) { ampP[4].v = constrain((mv[2] + 15) / 31, 0, 100); g |= AG_TMB; }
+  if (g) { n = ampFill(aa, w, n, g); uiDirty = true; }
+  if (onceWriteXLong(aa, w, n)) { for (int k = 0; k < 3; k++) potSent[k] = mv[k]; potAmp = amp; }
+}
+
+// Serial 'a': "a<type> <gain> <bass> <mid> <treble> <presence> <resonance> <drive> <sag> <master>" prints the AMP words
+// the panel computes for those settings (checked against dsp/model/amp_ref.ui_words); a trailing " !" also puts them on
+// the AMP page and writes them to the DSP (they only stay if AMP has run once since the DSP booted, see ampFollow).
+void ampCmd(const char *ln) {
+  int v[10], keep[10];
+  if (sscanf(ln, "%d %d %d %d %d %d %d %d %d %d", v, v + 1, v + 2, v + 3, v + 4, v + 5, v + 6, v + 7, v + 8, v + 9) != 10) {
+    Serial.println("AMP: need 10 values");
+    return;
+  }
+  for (int i = 0; i < 10; i++) { keep[i] = ampP[i].v; ampP[i].v = constrain(v[i], ampP[i].lo, ampP[i].hi); }
+  uint16_t aa[24];
+  uint32_t w[24], t0 = micros();
+  int n = ampFill(aa, w, 0, AG_ALL);
+  t0 = micros() - t0;
+  Serial.print("AMPW");
+  for (int k = 0; k < n; k++) Serial.printf(" %04X=%06lX", aa[k], (unsigned long)w[k]);
+  Serial.printf(" (%lu us)\n", (unsigned long)t0);
+  if (strchr(ln, '!')) {
+    bool ok = onceWriteXLong(aa, w, n);
+    Serial.printf("AMP written: %s\n", ok ? "ok" : "FAILED");
+    uiDirty = true;
+  } else for (int i = 0; i < 10; i++) ampP[i].v = keep[i];
+}
+
+// AMP's first call after a DSP boot loads its own defaults over X:$12C0: after anything that can put AMP in the path,
+// send the panel's AMP settings and the pedal-mode pot words (one halt; nothing when AMP is not playing)
+static void ampFollow() {
+  if (!fxInPath(6)) return;
+  uint16_t aa[28];
+  uint32_t w[28], v[4];
+  int n = ampFill(aa, w, 0, AG_ALL);
+  potFill(sysMv, v);
+  for (int k = 0; k < 4; k++) { aa[n] = POT_AA[k]; w[n++] = v[k]; }
+  if (onceWriteXLong(aa, w, n)) { for (int k = 0; k < 3; k++) potSent[k] = sysMv[k]; potAmp = true; }
 }
 
 // ---- Presets (presets.h; T4 = PRESET page): CHAIN mode + the preset's writes, all in one halt. TUNE's snap map and
@@ -769,7 +913,7 @@ static bool applyPreset(int i) {
   for (int k = 0; k < p.chainN; k++)                    // HARMONY: both maps in the key
     if (p.chain[k] == 10) { n = harmMapFill(1, aa, w, harmMapFill(0, aa, w, n)); break; }
   bool ok = onceWriteXLong(aa, w, n);
-  if (ok) { menu.preset = i; presetDirty = false; presetSave(); }
+  if (ok) { menu.preset = i; presetDirty = false; presetSave(); ampFollow(); }
   Serial.printf("PRESET %02d %s: %d writes %s\n", p.n, p.name, n, ok ? "ok" : "FAILED");
   displayStatus(ok ? "PRESET LOADED" : "DSP NOT ANSWERING", ok ? 0x30D060 : th::RED);
   return ok;
@@ -946,7 +1090,7 @@ bool uiPushAll() {
   memcpy(aa + 16, POT_AA, 4);
   potFill(mv, v + 16);
   bool ok = onceWriteXMany(aa, v, 20) && pushParams() && (!pr || applyPreset(menu.preset));
-  if (ok) for (int k = 0; k < 3; k++) potSent[k] = mv[k];
+  if (ok) { for (int k = 0; k < 3; k++) potSent[k] = mv[k]; potAmp = fxInPath(6); }
   displayStatus(ok ? "PANEL -> DSP" : "DSP NOT ANSWERING", ok ? 0x30D060 : th::RED);
   return ok;
 }
@@ -969,6 +1113,7 @@ static void uiChange(int d) {
     if (c == 3 && (d & 1)) { stripSet(!menu.strip); if (menu.preset >= 0) presetDirty = true; }   // every step toggles
     if ((c == 1 && menu.fx1 == 4) || (c == 2 && menu.fx2 == 4)) tuneSend();  // TUNE picked: push its settings
     if ((c == 1 && menu.fx1 == 10) || (c == 2 && menu.fx2 == 10)) harmSend(); // HARMONY: maps in the current key
+    if (c < 3) ampFollow();                                              // AMP: its settings + pedal-mode pots
   } else if (uiPage == PAGE_TUNE) {
     if (c == 0) menu.key = wrapv(menu.key + d, 12);
     if (c == 1) menu.scale = wrapv(menu.scale + d, 3);
@@ -1002,12 +1147,14 @@ static void bypass(int which) {
     bool ok = onceWriteXMany(aa, v, menu.byp1 ? 2 : 1);
     if (!ok) menu.byp1 = !menu.byp1;
     displayStatus(!ok ? "DSP NOT ANSWERING" : menu.byp1 ? "CHAIN BYPASSED" : "CHAIN ON", ok ? 0x30D060 : th::RED);
+    ampFollow();
     uiDirty = true;
     return;
   }
   bool &b = which == 1 ? menu.byp1 : menu.byp2;
   b = !b;
   send(which == 1 ? 0x21 : 0x22, b ? 0 : (which == 1 ? menu.fx1 : menu.fx2));  // bypass = CLEAN in that slot
+  ampFollow();
   if (uiPage == PAGE_FX) uiShow();
 }
 

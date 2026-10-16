@@ -93,6 +93,12 @@ def pre_stage(x, gain_db, bias, hp, lp, fs, k_bias=0.0):
 
 def tmb(l, m, t, comp='bassman'):
     """Fender/Marshall tone stack, Yeh & Smith (DAFx-06), bilinear. l/m/t = bass/mid/treble 0..1."""
+    b1, b2, b3, a1, a2, a3 = tmb_analog(l, m, t, comp)
+    return ss.bilinear([b3, b2, b1, 0], [a3, a2, a1, 1], FS)
+
+
+def tmb_analog(l, m, t, comp='bassman'):
+    """The analog H(s) = (b1 s + b2 s^2 + b3 s^3) / (1 + a1 s + a2 s^2 + a3 s^3)."""
     C1, C2, C3, R1, R2, R3, R4 = {
         'bassman': (250e-12, 20e-9, 20e-9, 250e3, 1e6, 25e3, 56e3),
         'marshall': (470e-12, 22e-9, 22e-9, 220e3, 1e6, 22e3, 33e3)}[comp]
@@ -110,7 +116,7 @@ def tmb(l, m, t, comp='bassman'):
     a3 = (l*m*(C1*C2*C3*R1*R2*R3 + C1*C2*C3*R2*R3*R4) - m*m*(C1*C2*C3*R1*R3*R3 + C1*C2*C3*R3*R3*R4)
           + m*(C1*C2*C3*R3*R3*R4 + C1*C2*C3*R1*R3*R3 - C1*C2*C3*R1*R3*R4) + l*C1*C2*C3*R1*R2*R4
           + C1*C2*C3*R1*R3*R4)
-    return ss.bilinear([b3, b2, b1, 0], [a3, a2, a1, 1], FS)
+    return b1, b2, b3, a1, a2, a3
 
 
 def peq(fc, gain_db, q, kind='peak'):

@@ -657,7 +657,7 @@ void loop() {
   if (!Serial.available()) return;
   char c = Serial.read();
   dspWatchHold = millis() + 10000;
-  if (c > ' ' && !strchr("iKEV[]-=FTUA", c)) liveOn = false;  // a command owns the screen rows until 'i'
+  if (c > ' ' && !strchr("iKEV[]-=FTUAa", c)) liveOn = false;  // a command owns the screen rows until 'i'
   switch (c) {
     case 't': case 'd': case 'n': case 'p': case 'r': case 'm': case 'w':  // J5 tools: retired, GPIO 5 is a pot now
       Serial.println("J5 tools retired (GPIO 5 = pot)"); break;
@@ -688,6 +688,7 @@ void loop() {
     case 'L': cmdLoad(); break;
     case 'G': cmdGo(); break;
     case 'F': menuDraw(); break;
+    case 'a': ampCmd(Serial.readStringUntil('\n').c_str()); break;     // AMP words for given settings (menu.h)
     case '[': case ']': case '-': case '=': menuKey(c); break;
     case '#': liveOn = true; uiPage = PAGE_PRESET; presetLevel = 0; uiShow(); break;   // PRESET page
     case '<': case '>':                                                    // previous / next preset (loads at rest)

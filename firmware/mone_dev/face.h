@@ -77,8 +77,10 @@ static void pedalDraw(uint32_t now, int fx) {
   bool byp = fx == menu.fx1 ? menu.byp1 : menu.byp2;
   float k[3];
   for (int i = 0; i < 3; i++) k[i] = constrain(sysMv[i] / 3100.0f, 0.0f, 1.0f);
-  static const char *const L[3] = {"VOL", "MIX", "TONE"};
-  th::pedal(FX_NAMES[fx], FX_COL[fx], k, L, byp || !dspAwake ? 0.0f : 0.45f + 0.55f * singLev, now);
+  static const char *const L[3] = {"VOL", "MIX", "TONE"}, *const LA[3] = {"LEVEL", "GAIN", "TONE"};
+  bool amp = fx == 6;                        // AMP: pedal mode, its knobs = the GAIN / TREBLE it plays with
+  if (amp) { k[1] = ampP[1].v / 100.0f; k[2] = ampP[4].v / 100.0f; }
+  th::pedal(FX_NAMES[fx], FX_COL[fx], k, amp ? LA : L, byp || !dspAwake ? 0.0f : 0.45f + 0.55f * singLev, now);
 }
 
 static void faceDraw(uint32_t now) {

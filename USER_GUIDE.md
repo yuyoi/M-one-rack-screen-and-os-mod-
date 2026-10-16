@@ -114,9 +114,16 @@ part above 3 kHz saturated and mixed back in, for clarity without boosting hiss)
 are at the top of `dsp/model/vox_model.py`.
 
 **AMP** is a modeled tube amp: a 4x oversampled preamp (three triode stages with coupling filters, dynamic bias and
-soft clipping), a Marshall-style tone stack, a power amp with resonance, presence and supply sag, and a 512-tap cab
-IR. `python model/sim_amp.py` runs it in the simulator against `model/amp_ref.py` (expect bit-exact). With the kernel
-it takes ~1770 of the 2112 cycles per frame, so it runs on its own, without vocal effects next to it.
+soft clipping), a Fender or Marshall tone stack, a power amp with resonance, presence and supply sag, and a 512-tap
+cab IR. `python model/sim_amp.py` runs it in the simulator against `model/amp_ref.py` (expect bit-exact). With the
+kernel it takes ~1770 of the 2112 cycles per frame, so it runs on its own, without vocal effects next to it.
+Its EDIT page: TYPE (CLEAN = Fender stack, low gain / CRUNCH / LEAD = Marshall stack; picking one loads its starting
+knobs), GAIN (0-10; 7.0 = the type's own gain, each step 1.25 dB on the first two stages), BASS / MID / TREBLE (the
+real tone-stack circuit, computed on the ESP), PRESENCE (wide 3 kHz peak, -12..+12 dB), RESONANCE (100 Hz, 0..+12 dB),
+DRIVE (power amp, -12..+18 dB), SAG (supply droop, 0-90 %), MASTER. While AMP plays the pots are a pedal: POT 1 = level,
+POT 2 = GAIN, POT 3 = TREBLE (a pot takes over its row once it moves; the mix is all amp, the kernel tone filter open),
+and the idle screen shows a mock pedal with LEVEL / GAIN / TONE. Serial `a<10 values>` prints the words the ESP
+computes for a setting (the check against `amp_ref.ui_words`).
 
 ## The front panel
 First boot (or serial `K`): the screen asks for every button by position, T1-T6 top row, B1-B6 bottom row, R1/R2
@@ -133,7 +140,7 @@ right column. Press each once; turn the encoder to skip a dead one. The map is s
 | R2 | back to the FX page |
 | B1 / B2 | bypass FX 1 / FX 2 (a preset: B1 bypasses its whole chain) |
 | B3 | reverb FREEZE on / off (while REVERB plays) |
-| POT 1 / 2 / 3 | volume (40 dB taper, far left = off) / dry-wet mix / tone (low-pass, far right = open) |
+| POT 1 / 2 / 3 | volume (40 dB taper, far left = off) / dry-wet mix / tone (low-pass, far right = open); with AMP playing: level / GAIN / TREBLE |
 | hold R1 + T6, 3 s | reboot the ESP (only while the face is asleep) |
 
 - PRESET page (T4): the loaded preset (number, name, type, chain, a hint like TONE DARK). Turn the knob (or T6 / B6)
@@ -147,7 +154,7 @@ right column. Press each once; turn the encoder to skip a dead one. The map is s
   once. With a preset loaded MODE shows CHAIN and the routing line shows the chain; turning FX 1 / FX 2 leaves it.
 - TUNE page: KEY, SCALE (chromatic / major / minor), SPEED 0-10 (0 = natural glide, 10 = hard robot). Notes outside
   the scale snap to the nearest scale note (ties snap down). All 13 values go to the DSP in one short halt.
-- EDIT page (T5): the settings of FX 1 (or of FX 2 when FX 1 has none) for RADIO, FORMANT, OCTAVE, HARMONY, DOUBLER,
+- EDIT page (T5): the settings of FX 1 (or of FX 2 when FX 1 has none) for AMP, RADIO, FORMANT, OCTAVE, HARMONY, DOUBLER,
   REVERB, DELAY, SHIMMER, SWELL and GRAIN; on the FX page's STRIP row, STRIP's own (GATE, DE-ESS, COMP, MAKEUP, DRIVE, EQ
   PRESENCE / AIR / LOW + EQ GAIN). The first row of FORMANT (VOICE), REVERB and DELAY (TYPE) is a preset that sets the rows under it;
   turning one of those rows by hand makes it CUSTOM. Long lists scroll (yellow arrows at the right edge). Changes go
