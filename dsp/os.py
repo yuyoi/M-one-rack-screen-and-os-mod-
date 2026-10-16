@@ -4,8 +4,10 @@ Params (X short, written live by the ESP over J8):
   X:$20 mode   0 = SINGLE (FX1)   1 = DOUBLE (FX1 || FX2, mixed)   2 = DOUBLE-SINGLE (FX1 -> FX2)
   X:$21 FX1    X:$22 FX2   effect ids: 0 clean, 1 heavy, 2 reverse, 3 comp, 4 tune (autotune.py at P:$400)
   tune: X:$0B retune speed (Q23 per sample), X:$23-$2E snap map (signed semitones per pitch class, 0 = chromatic)
+  output stage (the pots, after every mode): X:$2F dry gain, X:$3D wet gain (mix: the ESP sends 1-m and m),
+    X:$3E tone k (one-pole low-pass, $7FFFFF = off), X:$3C volume; X:$3F = tone filter state
 Effects are subroutines: input sample in X1, output in X1. Each keeps its own state:
-  heavy $32-$33 | reverse $34-$37 + X:$020000-$02FFFF | comp $38-$39 | kernel $30-$31, $3A-$3B
+  heavy $32-$33 | reverse $34-$37 + X:$020000-$02FFFF | comp $38-$39 | kernel $30-$31, $3A-$3B, $2F, $3C-$3F
   tune $00-$18, $23-$2E + X/Y:$0400-$07FF + X:$030000-$030FFF (load autotune.hex too: it lives at P:$400)
 """
 import os
@@ -55,8 +57,11 @@ for a in (0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x38, 0x3A, 0x3B, 0x20, 0x22):
     w(0x560000 | (a << 8))              # move a,x:$aa  (0)
 w(0x57F400, STEP, 0x553700)             # reverse step d = +STEP
 w(0x56F400, 0x7FFFFF, 0x563900)         # comp g = 1.0
-w(0x56F400, 0x000001, 0x542100)         # FX1 = heavy (A1 -> x:$21)
+w(0x56F400, 0x000000, 0x542100)         # FX1 = clean (A1 -> x:$21); the ESP pushes its panel state after boot
 w(0x56F400, 0x000002, 0x542200)         # FX2 = reverse
+w(0x56F400, 0x7FFFFF, 0x563D00)         # output stage until the ESP sends the pots: wet gain 1.0
+w(0x563E00, 0x563C00)                   # tone off (k = 1.0) ; volume 1.0
+w(0x200013, 0x562F00, 0x563F00)         # clr a ; dry gain 0 ; tone filter state 0
 # ---------------- sample loop
 L('loop')
 ext(0x01B388, 'loop')                   # jclr #8,x:SAISR,loop
@@ -78,7 +83,12 @@ call_fx(0x21)
 w(0x453B00, 0x45BA00)                   # x:$3B = fx1 out ; x1 = dry
 call_fx(0x22)
 w(0x56BB00, 0x200060, 0x200022, 0x21C500)  # x1 = (fx1 + fx2)/2
-L('out')
+L('out')                                # output stage: mix, tone, volume (x1 = wet, x:$3A = dry)
+w(0x44BA00, 0x46AF00, 0x2000D0)         # x0 = dry ; y0 = dry gain ; a = dry * dg
+w(0x20A400, 0x46BD00, 0x2000D3)         # x0 = wet ; y0 = wet gain ; a += wet * wg (rounded)
+w(0x57BF00, 0x200014, 0x21C400)         # b = lp ; a -= lp ; x0 = a
+w(0x46BE00, 0x2000DB, 0x573F00)         # y0 = k ; b += k * x0 (one-pole low-pass) ; lp = b
+w(0x21E400, 0x46BC00, 0x2000D1, 0x21C500)  # x0 = b ; y0 = volume ; a = x0 * volume ; x1 = a
 w(0x453100, 0x04C5C1)                   # x:$31 = out ; movep x1,x:TX1
 ext(0x0AF080, 'loop')
 L('left')

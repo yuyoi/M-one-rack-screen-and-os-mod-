@@ -26,7 +26,7 @@ static const uint8_t SCALE_STEPS[3][12] = {
 static const int SCALE_LEN[3] = {12, 7, 7};
 
 struct MenuState {
-  int mode = 0, fx1 = 1, fx2 = 2;  // matches the kernel defaults
+  int mode = 0, fx1 = 0, fx2 = 2;  // boot state: CLEAN (HEAVY is +60 dB: a wall of noise on a live mic)
   bool byp1 = false, byp2 = false;
   int key = 0, scale = 0, speed = 6;  // speed 6 ~ the DSP default (0.002 per sample)
   int cursor = 0;                  // row on the FX / TUNE page
@@ -239,13 +239,51 @@ static void tuneSend() {
   displayStatus(ok ? "tune sent to DSP" : "DSP not answering", ok ? C_GRN : C_RED);
 }
 
-// The whole panel state to the DSP in one halt: mode, FX1/FX2 (bypassed = CLEAN), tune. A freshly booted kernel starts
-// on its own defaults (SINGLE / HEAVY / REVERSE), so after every boot this makes the sound match the screen.
+// ---- Pots -> the kernel's output stage (normal / vocal mode): POT1 volume, POT2 dry/wet mix, POT3 tone.
+// (A later pedal mode can hand the three pots to the effect itself.)
+extern bool dspAwake;                        // face.h: the power switch says the DSP runs
+static const uint8_t POT_AA[4] = {0x2F, 0x3D, 0x3E, 0x3C};   // dry gain, wet gain, tone k, volume (dsp/os.py)
+static int potSent[3] = {-9999, -9999, -9999};
+
+static uint32_t q23(float x) { return (uint32_t)lroundf(constrain(x, 0.0f, 0.99999988f) * 8388608.0f) & 0xFFFFFF; }
+
+static void potFill(const int *mv, uint32_t *v) {
+  float p[3];
+  for (int k = 0; k < 3; k++) p[k] = constrain(mv[k] / 3100.0f, 0.0f, 1.0f);
+  float vol = p[0] < 0.02f ? 0.0f : powf(10.0f, 2.0f * (p[0] - 1.0f));      // 40 dB audio taper, far left = off
+  float fc = 400.0f * powf(50.0f, p[2]);                                     // tone: 400 Hz .. 20 kHz low-pass
+  float k = p[2] > 0.97f ? 1.0f : 1.0f - expf(-6.2831853f * fc / 44100.0f);  // far right = no filter
+  v[0] = q23(1.0f - p[1]);                   // linear crossfade: CLEAN stays at the same level at any mix
+  v[1] = q23(p[1]);
+  v[2] = q23(k);
+  v[3] = q23(vol);
+}
+
+// From controlsTick (every 50 ms): send when a pot moved more than 40 mV, at most every 100 ms (each send is one
+// short halt of the DSP, so they are kept rare)
+void potsToDsp(const int *mv) {
+  static uint32_t last = 0;
+  bool moved = false;
+  for (int k = 0; k < 3; k++) if (abs(mv[k] - potSent[k]) > 40) moved = true;
+  if (!moved || millis() - last < 100 || !dspAwake || learnIdx >= 0) return;
+  last = millis();
+  uint32_t v[4];
+  potFill(mv, v);
+  if (onceWriteXMany(POT_AA, v, 4)) for (int k = 0; k < 3; k++) potSent[k] = mv[k];
+}
+
+// The whole panel state to the DSP in one halt: mode, FX1/FX2 (bypassed = CLEAN), tune, pots. A freshly booted kernel
+// starts on its own defaults, so after every boot this makes the sound match the screen and the knobs.
 bool uiPushAll() {
-  uint8_t aa[16] = {0x20, 0x21, 0x22};
-  uint32_t v[16] = {(uint32_t)menu.mode, (uint32_t)(menu.byp1 ? 0 : menu.fx1), (uint32_t)(menu.byp2 ? 0 : menu.fx2)};
+  uint8_t aa[20] = {0x20, 0x21, 0x22};
+  uint32_t v[20] = {(uint32_t)menu.mode, (uint32_t)(menu.byp1 ? 0 : menu.fx1), (uint32_t)(menu.byp2 ? 0 : menu.fx2)};
   tuneFill(aa + 3, v + 3);
-  bool ok = onceWriteXMany(aa, v, 16);
+  int mv[3];
+  for (int k = 0; k < 3; k++) mv[k] = analogReadMilliVolts(PIN_POT[k]);
+  memcpy(aa + 16, POT_AA, 4);
+  potFill(mv, v + 16);
+  bool ok = onceWriteXMany(aa, v, 20);
+  if (ok) for (int k = 0; k < 3; k++) potSent[k] = mv[k];
   displayStatus(ok ? "panel state sent to DSP" : "DSP not answering", ok ? C_GRN : C_RED);
   return ok;
 }

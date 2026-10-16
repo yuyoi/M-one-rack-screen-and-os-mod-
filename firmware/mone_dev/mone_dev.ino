@@ -391,7 +391,11 @@ bool enterDebug(bool verbose) {
   jPinsUp();
   uint8_t st = jIR(IR_DEBUG_REQUEST);
   if (verbose) Serial.printf("IR capture before halt: %X (OS=%d%d)\n", st, (st >> 3) & 1, (st >> 2) & 1);
-  if (!waitDebug()) { if (verbose) Serial.println("core did NOT enter debug mode"); return false; }
+  if (!waitDebug()) {
+    if (verbose) Serial.println("core did NOT enter debug mode");
+    jIR(0x2);  // IDCODE: take DEBUG_REQUEST back out of the IR, or a DSP held in reset halts the moment it is released
+    return false;
+  }
   savedPdb = onceRead(OC_READ_PDB);
   savedPil = onceRead(OC_READ_PIL);
   if (verbose) Serial.printf("HALTED. PDB=%06lX PIL=%06lX OSCR=%06lX\n", savedPdb, savedPil, onceRead(OC_READ_OSCR));
@@ -504,6 +508,7 @@ void cmdGo() {
 // move #v,x0 ; move x0,x:$aa, restore X0, resume. Used by the menu.
 // Write n X-short words ($00-$3F) in ONE debug halt (one tiny audio gap however many values)
 bool onceWriteXMany(const uint8_t *aa, const uint32_t *value, int n) {
+  if (!dspAwake) return false;              // power switch off: the DSP is held in reset, don't even ask
   if (!enterDebug(false)) { jPinsDown(); return false; }
   exec1(0x08C43C);                          // movep x0,x:OGDB
   uint32_t savedX0 = onceRead(OC_READ_GDB);

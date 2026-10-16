@@ -103,6 +103,7 @@ right column. Press each once; turn the encoder to skip a dead one. The map is s
 | R1 / B4 / B5 | enter (value +1); on the SYSTEM page: button test |
 | R2 | back to the FX page |
 | B1 / B2 | bypass FX 1 / FX 2 |
+| POT 1 / 2 / 3 | volume (40 dB taper, far left = off) / dry-wet mix / tone (low-pass, far right = open) |
 | hold R1 + T6, 3 s | reboot the ESP (only while the face is asleep) |
 
 - FX page: MODE, FX 1, FX 2. Every change goes to the DSP at once.

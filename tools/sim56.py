@@ -212,11 +212,13 @@ class Sim:
         if n == 'Neg': self.setacc(D, -a); return
         if n == 'Asl_D': self.setacc(D, a << 1, carry=(a >> 55) & 1); return
         if n == 'Asr_D': self.setacc(D, a >> 1, carry=a & 1); return
-        if n in ('Mpy_S1S2D', 'Mac_S1S2'):
+        if n in ('Mpy_S1S2D', 'Mac_S1S2', 'Mpyr_S1S2D', 'Macr_S1S2'):
             q = ['X0,X0', 'Y0,Y0', 'X1,X0', 'Y1,Y0', 'X0,Y1', 'Y0,X0', 'X1,Y0', 'Y1,X1'][o.f(w, 'Q')].split(',')
             prod = (s24(self.r[q[0]]) * s24(self.r[q[1]])) << 1
             if o.f(w, 'k'): prod = -prod
-            self.setacc(D, prod if n.startswith('Mpy') else a + prod)
+            r = prod if n.startswith('Mpy') else a + prod
+            if n in ('Mpyr_S1S2D', 'Macr_S1S2'): r = (r + (1 << 23)) >> 24 << 24   # round into A1 (two's complement)
+            self.setacc(D, r)
             return
         if n == 'Max':   # MAX A,B: if |A| > |B| ... (not used)
             raise SimError('MAX not modelled')

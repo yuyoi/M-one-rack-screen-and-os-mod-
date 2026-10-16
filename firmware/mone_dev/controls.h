@@ -72,6 +72,7 @@ void liveRedraw() { for (int &v : shown) v = -9999; liveOn = true; faceOn = fals
 void btnEvent(int src, int val);           // buttons.h: src 1/2 = ladder (settled mV), 3 = direct (GPIO number)
 bool rowsVisible();                        // ui (menu.h): the SYSTEM page with the live rows is on screen
 void testPots(const int *v);               // ui (menu.h): pot bars on the button test page
+void potsToDsp(const int *mv);             // ui (menu.h): volume / mix / tone to the DSP
 
 // Call every loop: polls the encoder; every 50 ms reads pots/ladders/buttons, turns presses into button events
 // (ladders at release, with the settled level; direct pins at press) and refreshes the live rows if visible.
@@ -137,6 +138,7 @@ void controlsTick() {
   if (encSteps != encAct) { faceActivity(encSteps > encAct ? 1 : -1); encAct = encSteps; }
 
   testPots(v);
+  potsToDsp(v);
   if (!rowsVisible()) return;
   char b[40];
   if (abs(v[0] - shown[0]) > 60 || abs(v[1] - shown[1]) > 60 || abs(v[2] - shown[2]) > 60) {
