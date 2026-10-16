@@ -1,0 +1,10 @@
+# TC Electronic's copyrighted firmware and anything derived from it: supply your own dumps, never commit them
+dumps/*
+!dumps/README.txt
+*.bin
+*.lst
+# generated
+*.hex
+__pycache__/
+# GPL-3.0 opcode table: fetched and built by tools/fetch_opcodes.py
+tools/opcodes56300.json

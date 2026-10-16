@@ -1,0 +1,159 @@
+"""M-One OS kernel: routing modes + effect modules, one program. Writes os.hex.
+
+Params (X short, written live by the ESP over J8):
+  X:$20 mode   0 = SINGLE (FX1)   1 = DOUBLE (FX1 || FX2, mixed)   2 = DOUBLE-SINGLE (FX1 -> FX2)
+  X:$21 FX1    X:$22 FX2   effect ids: 0 clean, 1 heavy, 2 reverse, 3 comp, 4 tune (autotune.py at P:$400)
+  tune: X:$0B retune speed (Q23 per sample), X:$23-$2E snap map (signed semitones per pitch class, 0 = chromatic)
+Effects are subroutines: input sample in X1, output in X1. Each keeps its own state:
+  heavy $32-$33 | reverse $34-$37 + X:$020000-$02FFFF | comp $38-$39 | kernel $30-$31, $3A-$3B
+  tune $00-$18, $23-$2E + X/Y:$0400-$07FF + X:$030000-$030FFF (load autotune.hex too: it lives at P:$400)
+"""
+import os
+import sys
+HERE = os.path.dirname(os.path.abspath(__file__))
+for d in ('../tools', '../disasm'):
+    sys.path.insert(0, os.path.join(HERE, d))
+from dis56k import listing  # noqa: E402
+sys.path.insert(0, HERE)
+import autotune  # noqa: E402  (assembles it: we only need its entry points)
+TUNE_INIT, FX_TUNE = autotune.a.labels['tune_init'], autotune.a.labels['fx_tune']
+
+BASE = 0xA00
+# heavy
+K_HP, K_LP, H_TRIM = 0x07AE14, 0x399999, 0x080000
+# reverse
+N = 28760                       # 1 beat @ 92 BPM
+STEP = (2 << 23) // N
+FB, WET = 0x466666, 0x7FFFFF
+# comp
+T, DECAY, ATT, ONEMR, R = 0x0CCCCD, 0x7FF972, 0x7FDF3B, 0x7FFE5C, 0x0001A3
+
+p = []; labels = {}; fix = []
+def w(*x): p.extend(x)
+def L(n): labels[n] = BASE + len(p)
+def ext(op, n): p.append(op); fix.append((len(p), n, 0)); p.append(0)     # 2nd word = absolute address
+def jcc(op, n): fix.append((len(p), n, op)); p.append(0)                    # 12-bit short jump/branch
+def data(n): fix.append((len(p), n, 0)); p.append(0)                        # table word = label address
+
+def call_fx(param):                     # jsr table[x:param]
+    ext(0x66F400, 'table')              # move #table,r6
+    w({0x21: 0x76A100, 0x22: 0x76A200}[param])  # move x:$21/$22,n6
+    w(0x000000, 0x07EE96, 0x000000)     # nop ; movem p:(r6+n6),r6 ; nop
+    w(0x0BE680)                         # jsr (r6)
+
+# ---------------- init
+w(0x05F439, 0x800300)                   # movec #$800300,sr
+w(0x0500BB)                             # movec #0,sp   (fresh hardware stack: we JSR)
+for m in range(8):                      # m0..m7 linear (TC leaves m0 as a modulo register)
+    w(0x05F420 | m, 0xFFFFFF)
+w(0x0BF080, TUNE_INIT)                  # jsr tune_init (clears its buffers, default speed, chromatic)
+w(0x64F400, 0x020000, 0x200013)         # r4 = $020000 ; clr a
+w(0x57F400, 0x010000)                   # b = 65536
+L('clr')
+w(0x565C00, 0x01418C); jcc(0x0E2000, 'clr')   # clear the reverse buffer
+for a in (0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x38, 0x3A, 0x3B, 0x20, 0x22):
+    w(0x560000 | (a << 8))              # move a,x:$aa  (0)
+w(0x57F400, STEP, 0x553700)             # reverse step d = +STEP
+w(0x56F400, 0x7FFFFF, 0x563900)         # comp g = 1.0
+w(0x56F400, 0x000001, 0x542100)         # FX1 = heavy (A1 -> x:$21)
+w(0x56F400, 0x000002, 0x542200)         # FX2 = reverse
+# ---------------- sample loop
+L('loop')
+ext(0x01B388, 'loop')                   # jclr #8,x:SAISR,loop
+w(0x0445C9)                             # movep x:RX1,x1
+ext(0x01B3A6, 'left')                   # jset #6,x:SAISR,left
+w(0x56B000, 0x200060, 0x21C500, 0x453A00)  # x1 = sat(L+R) ; x:$3A = dry
+w(0x56A000, 0x200003)                   # a = mode ; tst a
+jcc(0x0EA000, 'single')                 # jeq single
+w(0x014185)                             # cmp #1,a
+jcc(0x0EA000, 'parallel')               # jeq parallel
+# series: FX1 -> FX2
+call_fx(0x21); call_fx(0x22)
+jcc(0x0C0000, 'out')
+L('single')
+call_fx(0x21)
+jcc(0x0C0000, 'out')
+L('parallel')
+call_fx(0x21)
+w(0x453B00, 0x45BA00)                   # x:$3B = fx1 out ; x1 = dry
+call_fx(0x22)
+w(0x56BB00, 0x200060, 0x200022, 0x21C500)  # x1 = (fx1 + fx2)/2
+L('out')
+w(0x453100, 0x04C5C1)                   # x:$31 = out ; movep x1,x:TX1
+ext(0x0AF080, 'loop')
+L('left')
+w(0x453000, 0x45B100, 0x04C5C1)         # store L in ; output last result
+ext(0x0AF080, 'loop')
+
+# ---------------- effect table
+L('table')
+data('fx_clean'); data('fx_heavy'); data('fx_rev'); data('fx_comp'); data('fx_tune')
+labels['fx_tune'] = FX_TUNE
+
+# ---------------- clean
+L('fx_clean')
+w(0x00000C)                             # rts
+
+# ---------------- heavy (x1 -> x1)
+L('fx_heavy')
+w(0x20AE00, 0x57B200, 0x200014, 0x21C400)          # a = x ; hp = x - lp ; x0 = hp
+w(0x0141CA, K_HP, 0x573200)                        # lp += k*hp
+w(0x208E00, 0x0C1D08, 0x21C400)                    # +24 dB, clip
+w(0x208E00, 0x0C1D08, 0x21C400)                    # +24 dB, clip
+w(0x208E00, 0x0C1D04, 0x21C400)                    # +12 dB, clip
+w(0x200080, 0x21C600, 0x2000D0, 0x21C700)          # x^2, x^3
+w(0x0141C8, 0x600000, 0x0141FE, 0x200000, 0x20003A, 0x21E500)  # cubic soft clip -> x1
+w(0x20AE00, 0x57B300, 0x200014, 0x21C400)          # post LPF
+w(0x0141CA, K_LP, 0x573300, 0x21E500)
+w(0x0141E0, H_TRIM, 0x21C500)                      # trim
+w(0x00000C)                                        # rts
+
+# ---------------- reverse (x1 -> x1)
+L('fx_rev')
+w(0x20A400)                                        # x0 = dry
+w(0x57B500, 0x20003A, 0x56B400, 0x200014, 0x014184)  # a = w - 2c - 1
+w(0x0140C6, 0x00FFFF, 0x0140C2, 0x020000, 0x219500, 0x000000)
+w(0x46E500)                                        # y0 = buf[read]
+w(0x47B600, 0x2000B0, 0x21C600)                    # y0 = wet * window
+w(0x208E00, 0x0141D2, FB, 0x21C500)                # x1 = dry + FB*wet  (to write)
+w(0x57B400, 0x0140CE, 0x00FFFF, 0x0140CA, 0x020000, 0x21B400, 0x000000)
+w(0x456400)                                        # buf[w] = x1
+w(0x208E00, 0x200022, 0x0141D2, WET, 0x0C1D04, 0x21C500)  # x1 = (dry/2 + wet) * 4
+w(0x56B400, 0x014180, 0x0140C6, 0x00FFFF, 0x543400)  # w++
+w(0x57B600, 0x47B700, 0x200078, 0x553600)          # g += d
+w(0x56B500, 0x014180, 0x543500)                    # c++
+w(0x0140C5, N // 2); jcc(0x0E2000, 'rev_half')
+w(0x57B700, 0x20003E, 0x553700)                    # d = -d
+L('rev_half')
+w(0x0140C5, N); jcc(0x0E2000, 'rev_done')
+w(0x20001B, 0x553500, 0x553600, 0x57F400, STEP, 0x553700)  # c = g = 0 ; d = +STEP
+L('rev_done')
+w(0x00000C)                                        # rts
+
+# ---------------- comp (x1 -> x1)
+L('fx_comp')
+w(0x20A400)                                        # x0 = x
+w(0x46B900, 0x2000D0, 0x21C500)                    # x1 = y = x*g
+w(0x20AF00, 0x20002E)                              # b = |y|
+w(0x47B800, 0x0141F0, DECAY)                       # a = env*decay
+w(0x20000D)                                        # cmp a,b
+jcc(0x0EF000, 'comp_np')                           # jle
+w(0x21EE00)                                        # a = b
+L('comp_np')
+w(0x563800, 0x47B900)                              # env = a ; y1 = g
+w(0x0140C5, T); jcc(0x0E7000, 'comp_over')         # cmp #T,a ; jgt over
+w(0x0141F8, ONEMR, 0x0140C8, R)                    # release toward 1
+jcc(0x0C0000, 'comp_st')
+L('comp_over')
+w(0x0141F8, ATT)                                   # attack
+L('comp_st')
+w(0x573900, 0x20AE00, 0x0C1D04, 0x21C500)          # g = b ; x1 = sat(y * 4)
+w(0x00000C)                                        # rts
+
+for i, n, op in fix:
+    p[i] = (op | labels[n]) if op else labels[n]
+end = BASE + len(p) - 1
+assert end <= 0xBFF, 'program runs past internal P RAM: %X' % end
+print(listing(p, base=BASE))
+print('words=%d  end=P:%04X  labels=%s' % (len(p), end, {k: '%04X' % v for k, v in labels.items() if k.startswith(('fx', 'table'))}))
+open(os.path.join(HERE, 'os.hex'), 'w').write('%X\n%s\n' % (BASE, ' '.join('%06X' % x for x in p)))
