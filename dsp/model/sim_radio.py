@@ -26,14 +26,17 @@ def boot_os(fx1):
         if not os.environ.get('MONE_NOBUILD'):
             runpy.run_path(os.path.join(HERE, '..', 'vocal.py'), run_name='__main__')
             runpy.run_path(os.path.join(HERE, '..', 'vocal2.py'), run_name='__main__')
+            runpy.run_path(os.path.join(HERE, '..', 'vocal3.py'), run_name='__main__')
+            runpy.run_path(os.path.join(HERE, '..', 'amp.py'), run_name='__main__')
         labels = runpy.run_path(os.path.join(HERE, '..', 'os.py'), run_name='labels')['labels']
     ob, ow = hexwords('os.hex')
     s = Sim(ow, ob)
-    for name in ('autotune.hex', 'vocal.hex', 'vocal2.hex'):
+    for name in ('autotune.hex', 'vocal.hex', 'vocal2.hex', 'vocal3.hex', 'amp.hex'):
         b, w = hexwords(name)
         s.P.update({b + i: v for i, v in enumerate(w)})
-    b, w = hexwords('vocal_tab.hex')
-    s.X.update({b + i: v for i, v in enumerate(w)})
+    for name in ('vocal_tab.hex', 'vocal2_tab.hex', 'vocal3_tab.hex', 'amp_tab.hex'):
+        b, w = hexwords(name)
+        s.X.update({b + i: v for i, v in enumerate(w)})
     s.pc = ob
     while s.pc != labels['loop']:
         s.step()

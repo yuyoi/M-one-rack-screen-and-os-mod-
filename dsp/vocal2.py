@@ -28,8 +28,8 @@ TMP = 0x01FF                                     # X: input sample while tune_de
 # state offsets (X:(R3+n))
 (W, BMAX, BPOS, BCNT, MI) = range(5)
 MARKS = 5
-(TIM1, TIM0, PC, INVP, RR, RB, DRY, P_, PF1, PF0, F1, F0) = range(13, 25)
-SLOTS = 26
+(TIM1, TIM0, PC, INVP, RR, RB, DRY, P_, PF1, PF0, F1, F0, F2C) = range(13, 26)   # PC = cached PF
+SLOTS = 27
 (ACT, TC, WV, DW, POS1, POS0) = range(6)
 NST = SLOTS + 6 * pm.NS
 assert NST <= 0x40
@@ -64,7 +64,12 @@ for name, (xs, pb, ring, prm) in INST.items():
 # ============================================================ psola: R3 = state, R5 = params, X1 = input
 a.label('psola')
 h.xw('X1', DRY)
-h.ldx(PF_ADDR, 'A'); h.tst('A'); j('NE', 'p_have')                 # period P from the detector
+h.ldx(PF_ADDR, 'A'); h.xr('B', PC); h.cmp('A', 'B'); j('NE', 'p_set')         # period or F2 changed: recompute
+h.xr('A', 1, R=5); h.xr('B', F2C); h.cmp('A', 'B'); j('EQ', 'p_ready')
+h.ldx(PF_ADDR, 'A')
+a.label('p_set')
+h.xw('A', PC); h.xr('A', 1, R=5); h.xw('A', F2C); h.ldx(PF_ADDR, 'A')
+h.tst('A'); j('NE', 'p_have')                                       # period P from the detector
 h.li('A', 200); j('T', 'p_clamp')
 a.label('p_have')
 h.lsr(13, 'A')
@@ -74,31 +79,22 @@ a.label('p_lo')
 h.cmpi(600, 'A'); j('LE', 'p_hi'); h.li('A', 600)
 a.label('p_hi')
 h.xw('A1', P_)
-h.xr('B', PC); h.cmp('A', 'B'); j('EQ', 'p_inv')                   # 1/P when P changed: restoring division
-h.xw('A1', PC); h.mv('A1', 'X0')
-h.clr('A'); h.clr('B')
-a.do(23, 'p_div')
-h.asl1('A'); h.addi(1, 'A'); h.asl1('B')                            # bring in the next numerator bit (all 1s)
-h.cmp('X0', 'A'); j('LT', 'p_dskip')
-h.sub('X0', 'A'); h.addi(1, 'B')
-a.label('p_dskip')
-h.nop()
-a.label('p_div')
-h.xw('B1', INVP)
-a.label('p_inv')
+h.addi(pm.INVTAB, 'A'); h.mv('A1', 'R1'); h.nop()                  # 1/P from the SRAM table (vocal2_tab.hex)
+h.ldxi('(R1)', 'X0'); h.xw('X0', INVP)
 h.xr('A', 1, R=5); h.tfr('A', 'B'); h.lsr(22, 'A'); h.xw('A1', F1)  # f as 24.24: F1 = F2 >> 22, F0 = F2 << 2
 h.lsl(2, 'B'); h.xw('B1', F0)
 h.xr('X0', P_); h.xr('Y0', 1, R=5); h.mpy('X0', 'Y0', 'A'); h.asl1('A')     # P*f (24.24)
 h.xw('A1', PF1); h.xw('A0', PF0)
-h.xr('A', W); h.andi(pm.NRING - 1, 'A'); h.xr('Y0', RB); h.orr('Y0', 'A'); h.mv('A1', 'R1'); h.nop()
+a.label('p_ready')
+h.xr('A', W); h.xr('Y0', RB); h.andi(pm.NRING - 1, 'A'); h.orr('Y0', 'A'); h.mv('A1', 'R1')
+h.mv('X1', 'A'); h.abs_('A'); h.xr('B', BMAX)
 h.stxi('X1', '(R1)')                                                 # ring write
-h.mv('X1', 'A'); h.abs_('A'); h.xr('B', BMAX); h.cmp('B', 'A'); j('LE', 'p_mk1')   # marks
+h.cmp('B', 'A'); j('LE', 'p_mk1')                                    # marks
 h.xw('A', BMAX); h.xr('B', W); h.xw('B1', BPOS)
 a.label('p_mk1')
 h.xr('B', BCNT); h.addi(1, 'B'); h.xr('Y0', P_); h.cmp('Y0', 'B'); j('LT', 'p_mk2')
-h.xr('A', MI); h.addi(MARKS, 'A'); h.mv('A1', 'N3'); h.nop(); h.lua(3, 'R2'); h.nop()
-h.xr('B', BPOS); h.stxi('B', '(R2)')
-h.xr('A', MI); h.addi(1, 'A'); h.andi(pm.NM - 1, 'A'); h.xw('A1', MI)
+h.xr('A', MI); h.addi(MARKS, 'A'); h.mv('A1', 'N3'); h.xr('B', BPOS); h.xr('A', MI); h.nop(); h.lua(3, 'R2')
+h.addi(1, 'A'); h.andi(pm.NM - 1, 'A'); h.xw('A1', MI); h.stxi('B', '(R2)')
 h.clr('A'); h.xw('A', BMAX); h.clr('B')
 a.label('p_mk2')
 h.xw('B1', BCNT)
@@ -108,46 +104,45 @@ h.xr('X0', P_); h.xr('Y0', 0, R=5); h.mpy('X0', 'Y0', 'B'); h.asl1('B'); h.add('
 h.xw('A1', TIM1); h.xw('A0', TIM0)
 h.xr('A', W); h.xr('X0', P_); h.sub('X0', 'A'); h.xr('X0', PF1); h.sub('X0', 'A'); h.subi(64, 'A')
 h.mv('A1', 'Y0')                                                     # want = W - (P + P*f + 64)
-h.li('B', 0x7FFFFF); h.li('N3', MARKS); h.nop(); h.lua(3, 'R2'); h.nop()
-a.do(pm.NM, 'p_near')                                                # nearest mark
-h.ldxi('(R2)+', 'X1'); h.mv('X1', 'A'); h.sub('Y0', 'A'); h.mv('A1', 'X0'); h.mv('X0', 'A'); h.abs_('A')
-h.cmp('B', 'A'); j('GE', 'p_nb')
-h.tfr('A', 'B'); h.mv('X1', 'Y1')
-a.label('p_nb')
-h.nop()
-a.label('p_near')
+h.li('B', 0x7FFFFF)
+for m in range(pm.NM):                                               # nearest mark (unrolled)
+    h.xr('X1', MARKS + m); h.mv('X1', 'A'); h.sub('Y0', 'A'); h.mv('A1', 'X0'); h.mv('X0', 'A'); h.abs_('A')
+    h.cmp('B', 'A'); j('GE', 'p_nb%d' % m)
+    h.tfr('A', 'B'); h.mv('X1', 'Y1')
+    a.label('p_nb%d' % m)
 h.xr('A', RR); h.tfr('A', 'B'); h.asl(2, 'A'); h.asl1('B'); h.add('B', 'A'); h.addi(SLOTS, 'A')   # slot RR
-h.mv('A1', 'N3'); h.nop(); h.lua(3, 'R2')
-h.xr('A', RR); h.addi(1, 'A'); h.andi(pm.NS - 1, 'A'); h.xw('A1', RR)
-h.xr('A', P_); h.asl1('A'); h.xw('A1', ACT, R=2)
-h.xr('A', P_); h.xw('A1', TC, R=2)
+h.mv('A1', 'N3'); h.xr('A', RR); h.addi(1, 'A'); h.cmpi(pm.NS, 'A'); j('LT', 'p_rr'); h.clr('A')
+a.label('p_rr')
+h.xw('A1', RR); h.lua(3, 'R2')
+h.xr('A', P_); h.asl1('A'); h.xr('B', P_); h.xr('X1', PF1); h.xr('X0', PF0); h.nop()
+h.xw('A1', ACT, R=2); h.xw('B1', TC, R=2)
 h.clr('A'); h.xw('A', WV, R=2)
 h.xr('A', INVP); h.xw('A1', DW, R=2)
-h.clr('A'); h.mv('Y1', 'A1'); h.xr('X1', PF1); h.xr('X0', PF0); h.sub('X', 'A')   # POS = mark - P*f
+h.clr('A'); h.mv('Y1', 'A1'); h.sub('X', 'A')                       # POS = mark - P*f
 h.xw('A1', POS1, R=2); h.xw('A0', POS0, R=2)
 j('T', 'p_slots')
 a.label('p_keep')
 h.xw('A1', TIM1); h.xw('A0', TIM0)
-a.label('p_slots')                                                   # grains
-h.clr('B'); h.li('N3', SLOTS); h.li('N2', 6); h.nop(); h.lua(3, 'R2'); h.nop()
-a.do(pm.NS, 'p_sl')
-h.xr('A', ACT, R=2); h.tst('A'); j('LE', 'p_skip')
-h.xr('A', POS1, R=2); h.andi(pm.NRING - 1, 'A'); h.xr('Y0', RB); h.orr('Y0', 'A'); h.mv('A1', 'R1')
-h.addi(1, 'A'); h.andi(pm.NRING - 1, 'A'); h.orr('Y0', 'A'); h.mv('A1', 'R4')
-h.clr('A'); h.xr('A1', POS0, R=2); h.lsr(1, 'A'); h.mv('A1', 'Y1')                # fraction (Q23)
-h.ldxi('(R1)', 'X0'); h.ldxi('(R4)', 'A'); h.sub('X0', 'A'); h.mv('A', 'X1')
-h.mpy('X1', 'Y1', 'A'); h.add('X0', 'A'); h.mv('A', 'X1')                          # v
-h.xr('Y0', WV, R=2); h.mac('X1', 'Y0', 'B')
-h.xr('A', POS1, R=2); h.xr('A0', POS0, R=2); h.xr('X1', F1); h.xr('X0', F0); h.add('X', 'A')
-h.xw('A1', POS1, R=2); h.xw('A0', POS0, R=2)
-h.xr('A', WV, R=2); h.xr('Y0', DW, R=2); h.add('Y0', 'A'); h.xw('A', WV, R=2)
-h.xr('A', TC, R=2); h.subi(1, 'A'); h.xw('A1', TC, R=2); h.tst('A'); j('NE', 'p_tc')
-h.xr('A', DW, R=2); h.neg('A'); h.xw('A', DW, R=2)
-a.label('p_tc')
-h.xr('A', ACT, R=2); h.subi(1, 'A'); h.xw('A1', ACT, R=2)
-a.label('p_skip')
-h.lua(2, 'R2')
-a.label('p_sl')
+a.label('p_slots')                                                   # grains (unrolled: no R2 interlocks)
+h.clr('B'); h.xr('Y0', RB)
+for k in range(pm.NS):
+    o = SLOTS + 6 * k
+    h.xr('A', o + ACT); h.tst('A'); j('LE', 'p_skip%d' % k)
+    h.xr('A', o + POS1); h.andi(pm.NRING - 1, 'A'); h.orr('Y0', 'A'); h.mv('A1', 'R1')
+    h.addi(1, 'A'); h.andi(pm.NRING - 1, 'A'); h.orr('Y0', 'A'); h.mv('A1', 'R4')
+    h.clr('A'); h.xr('A1', o + POS0); h.lsr(1, 'A'); h.mv('A1', 'Y1')                    # fraction (Q23)
+    h.ldxi('(R1)', 'X0'); h.ldxi('(R4)', 'A'); h.sub('X0', 'A'); h.xr('Y0', o + WV); h.mv('A', 'X1')
+    h.mpy('X1', 'Y1', 'A'); h.add('X0', 'A'); h.xr('X0', F0); h.mv('A', 'X1')            # v
+    h.mac('X1', 'Y0', 'B')
+    h.xr('A', o + POS1); h.xr('A0', o + POS0); h.xr('X1', F1); h.add('X', 'A')
+    h.xr('Y0', o + DW); h.xw('A1', o + POS1); h.xw('A0', o + POS0)
+    h.xr('A', o + WV); h.add('Y0', 'A'); h.xr('X0', o + TC); h.xw('A', o + WV)
+    h.mv('X0', 'A'); h.subi(1, 'A'); h.xw('A1', o + TC); j('NE', 'p_tc%d' % k)
+    h.xr('A', o + DW); h.neg('A'); h.xw('A', o + DW)
+    a.label('p_tc%d' % k)
+    h.xr('A', o + ACT); h.subi(1, 'A'); h.xw('A1', o + ACT)
+    a.label('p_skip%d' % k)
+    h.xr('Y0', RB)
 h.mv('B', 'X0'); h.xr('Y0', 3, R=5); h.mpy('X0', 'Y0', 'A'); h.asl1('A'); h.mv('A', 'X0')   # gain
 h.xr('X1', DRY); h.mv('X0', 'A'); h.sub('X1', 'A'); h.mv('A', 'Y0')                       # wet / dry
 h.xr('Y1', 2, R=5); h.mv('X1', 'B'); h.mac('Y0', 'Y1', 'B'); h.mv('B', 'X1')
@@ -164,3 +159,4 @@ if __name__ == '__main__':
     print('words=%d end=P:%04X  init=%04X formant=%04X octave=%04X' % (len(words), end, VOCAL2_INIT, FX_FORMANT,
                                                                        FX_OCTAVE))
     a.hexfile(os.path.join(HERE, 'vocal2.hex'))
+    open(os.path.join(HERE, 'vocal2_tab.hex'), 'w').write('%X\n%s\n' % (pm.INVTAB, ' '.join('%06X' % v for v in pm.inv_table())))

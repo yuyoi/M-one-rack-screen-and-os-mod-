@@ -23,7 +23,7 @@ XS, YC, SLAP = 0x0100, 0x0100, 0x032000
 ENV, G, LP, LPD, W, PK = range(0x1A, 0x20)
 q = vm.q23
 # RADIO: X state at RS (via R3 + displacement), Y mode table at YR (via R5), wobble ring X:$1300, params X:$0210
-RS, YR, RRING, RTAB, RP = 0x0140, 0x0140, 0x1300, 0x03C000, 0x0210
+RS, YR, RRING, RTAB, RP = 0x0140, 0x0140, 0x1300, 0x031000, 0x0210
 (R_EIN, R_G, R_ENV, R_DCL, R_PH, R_HELD, R_W, R_S1, R_C1, R_S2, R_C2, R_LF, R_HL, R_CLK, R_BT, R_POPEN, R_CUR,
  R_DRY, R_TZ, R_TN1, R_TNZ, R_TS) = range(20, 42)
 RSN = 42
@@ -311,7 +311,7 @@ assert end <= END, 'vocal.py runs past P:%04X: %X' % (END, end)
 VOX_INIT, FX_VOX, FX_RADIO = a.labels['vox_init'], a.labels['fx_vox'], a.labels['fx_radio']
 # external SRAM tables (vocal_tab.hex, loaded by `boot`): RADIO's 6 mode tables, then VOX's coefficients
 TAB = [w for m in range(len(rm.MODES)) for w in rm.mode_table(m)] + [w & 0xFFFFFF for w in vm.coef_words()]
-assert RTAB + len(TAB) <= 0x03D000
+assert RTAB + len(TAB) <= 0x032000                       # SRAM $031000-$031FFF: vocal tables
 if __name__ == '__main__':
     if '-l' in sys.argv:
         print(listing(words, base=BASE))

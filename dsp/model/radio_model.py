@@ -6,7 +6,7 @@ Chain per sample (every mode runs the same blocks; the mode table sets them):
   wobble delay (wow + flutter LFOs, direct/delay mix = horn comb for MEGAPHONE) -> + crackle -> gate -> out gain ->
   wet/dry.
 Params (X:$0210 block): +0 mode (int 0-5), +1 wet, +2 drive trim, +3 noise trim (trims: $400000 = as voiced).
-Mode tables (48 words each) live in external SRAM X:$03C000 (loaded by `boot` as radio_tab.hex) and are copied to
+Mode tables (48 words each) live in external SRAM X:$031000 (loaded by `boot` as radio_tab.hex) and are copied to
 Y when the mode param changes.
 """
 import numpy as np

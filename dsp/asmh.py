@@ -26,8 +26,9 @@ def MAC(s1, s2, d, k=0):
 
 
 class H:
-    def __init__(self, a):
+    def __init__(self, a, long_jumps=None):
         self.a = a
+        self.long = a.base >= 0x1000 if long_jumps is None else long_jumps   # short jumps reach P:$0FFF only
 
     # moves
     def mv(self, s, d): self.a.par(move=('Mover', dict(e=R5[s], d=R5[d])))
@@ -80,6 +81,6 @@ class H:
     # flow
     def nop(self): self.a.word(0)
     def rts(self): self.a.word(0x00000C)
-    def j(self, c, lbl): self.a.jshort(c, lbl)
+    def j(self, c, lbl): self.a.jlong(c, lbl) if self.long else self.a.jshort(c, lbl)
     def rep(self, n): self.a.op('Rep_xxx', i=n & 0xFF, h=n >> 8)
     def movec(self, ctrl, v): self.a.op('Movec_ea', ext=v, W=1, S=0, D=C5[ctrl], **EA_IMM)

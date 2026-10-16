@@ -1,8 +1,9 @@
 """Hardware check of effects with the outputs MUTED: boot the OS meter build with FX1 = id, read back state + load.
 
   py -3.10 fxmeter.py socket://192.168.1.77:23 4 7 8 9      (effect ids)
+  py -3.10 fxmeter.py socket://192.168.1.77:23 chain:7,12   (CHAIN mode: RADIO -> REVERB)
 For each id: builds os_meter.hex with FX1 = id at init, loads every module + its tables + codec_on with the DAC level
-at 0 (silent), runs 6 s, then reads the idle-spin histogram (X:$1100, 1 spin = 9.14 cycles) and a few state words.
+at 0 (silent), runs 6 s, then reads the idle-spin histogram (X:$1400, 1 spin = 9.14 cycles) and a few state words.
 Leaves the DSP running the muted meter build: run `mone.py ... boot` afterwards for the normal OS with sound.
 """
 import os
@@ -31,9 +32,10 @@ def read(port, space, start, count, tmp):
 
 
 def main():
-    port, ids = sys.argv[1], [int(v) for v in sys.argv[2:]]
+    port = sys.argv[1]
+    ids = [v if v.startswith('chain:') else int(v) for v in sys.argv[2:]]
     tmpd = tempfile.mkdtemp()
-    for name in ('autotune.py', 'vocal.py', 'vocal2.py'):
+    for name in ('autotune.py', 'vocal.py', 'vocal2.py', 'vocal3.py', 'amp.py'):
         subprocess.run([PY, os.path.join(DSP, name)], check=True, capture_output=True)
     subprocess.run([PY, os.path.join(DSP, 'os.py'), 'meter'], check=True, capture_output=True)
     subprocess.run([PY, os.path.join(DSP, 'codec_on.py'), 'dac=00'], check=True, capture_output=True, cwd=DSP)
@@ -43,11 +45,17 @@ def main():
     base, words = open(os.path.join(DSP, 'os_meter.hex')).read().split('\n')[:2]
     w = words.split()
     k = next(i for i in range(len(w) - 2) if w[i] == '56F400' and w[i + 1] == '000000' and w[i + 2] == '542100')
+    import runpy, io, contextlib
+    sys.argv = ['os.py', 'meter']
+    with contextlib.redirect_stdout(io.StringIO()):
+        loop = runpy.run_path(os.path.join(DSP, 'os.py'))['labels']['loop']
     for fx in ids:
-        w[k + 1] = '%06X' % fx
-        osk = os.path.join(tmpd, 'os_m%d.hex' % fx)
+        chain = [int(v) for v in fx.split(':')[1].split(',')] if isinstance(fx, str) else None
+        w[k + 1] = '%06X' % (0 if chain else fx)
+        osk = os.path.join(tmpd, 'os_m%s.hex' % str(fx).replace(':', '_').replace(',', '_'))
         open(osk, 'w').write(base + '\n' + ' '.join(w) + '\n')
-        for f in ('autotune.hex', 'vocal.hex', 'vocal_tab.hex', 'vocal2.hex'):
+        for f in ('autotune.hex', 'vocal.hex', 'vocal_tab.hex', 'vocal2.hex', 'vocal2_tab.hex', 'vocal3.hex',
+                  'vocal3_tab.hex', 'amp.hex', 'amp_tab.hex'):
             out = run(port, 'load', os.path.join(DSP, f))
             if 'verify OK' not in out:
                 raise SystemExit('%s: %s' % (f, out))
@@ -56,15 +64,34 @@ def main():
             if 'verify OK' not in out:
                 raise SystemExit('%s: %s' % (f, out))
         run(port, 'go', '900')
+        if chain:                                    # poke CHAIN mode in, then back into the kernel loop
+            time.sleep(1)
+            from asm56 import Asm, R5
+            pa = Asm(0x950)
+            for addr, val in [(0x20, 3), (0x0200, len(chain))] + [(0x0201 + i, c) for i, c in enumerate(chain)]:
+                pa.par(move=('Movex_ea', dict(W=1, d=R5['A'], M=6, R=4)), ext=val)
+                pa.par(move=('Movex_ea', dict(W=0, d=R5['A'], M=6, R=0)), ext=addr)
+            pa.labels['loop'] = loop
+            pa.jmp('loop')
+            pa.link()
+            pk = os.path.join(tmpd, 'poke.hex')
+            pa.hexfile(pk)
+            out = run(port, 'load', pk)
+            if 'verify OK' not in out:
+                raise SystemExit('poke: ' + out)
+            run(port, 'go', '950')
         time.sleep(6)
-        hist = read(port, 'x', 0x1100, 0x100, os.path.join(tmpd, 'h.bin'))
+        hist = read(port, 'x', 0x1400, 0x100, os.path.join(tmpd, 'h.bin'))
         fx1 = read(port, 'x', 0x21, 1, os.path.join(tmpd, 'f.bin'))[0]
         nz = [(s, c) for s, c in enumerate(hist) if c]
         tot = sum(hist)
         lo = nz[0][0] if nz else -1
-        print('FX1=%d (read back %d)  frames %d  min spins %d -> worst %d cycles used of %d  (typical %d)' % (
+        print('FX1=%s (read back %d)  frames %d  min spins %d -> worst %d cycles used of %d  (typical %d)' % (
             fx, fx1, tot, lo, FRAME - lo * SPIN, FRAME, FRAME - max(nz, key=lambda t: t[1])[0] * SPIN))
         print('   lowest bins:', nz[:5])
+        if chain:
+            cb = read(port, 'x', 0x0200, 4, os.path.join(tmpd, 'c.bin'))
+            print('   CHAIN mode %d  block %s' % (read(port, 'x', 0x20, 1, os.path.join(tmpd, 'm.bin'))[0], cb))
         if fx == 7:
             st = read(port, 'x', 0x0140 + 20, 22, os.path.join(tmpd, 's.bin'))
             print('   RADIO cur mode %d  W %d  LFSR %06X  g %06X  env %06X' % (st[16], st[6], st[11], st[1], st[2]))

@@ -2,7 +2,7 @@
 
 Per sample:
   period  : P = PF >> 13 (TUNE detector readout X:$0D, Q23 of P/256 at 11025 Hz), clamped 40..600, 200 if PF = 0.
-            invP = 1/P (Q23, restoring division) is recomputed only when P changes.
+            invP = 1/P (Q23) from a table in SRAM (X:INVTAB + P, vocal2_tab.hex).
   ring    : x -> X:RING + (W & 4095) (external SRAM), W counts samples forever (24-bit).
   marks   : the biggest |x| in each block of P samples -> MARKS[8] (absolute positions).
   timer   : 48-bit (A1 = samples, A0 = fraction). -1 per sample; at <= 0: += Pout = P/p and start a grain.
@@ -16,7 +16,8 @@ import numpy as np
 
 Q = 1 << 23
 M24 = (1 << 24) - 1
-NRING, NM, NS = 4096, 8, 4
+NRING, NM, NS = 4096, 4, 3              # 3 grain slots: enough for p <= 1.5 (more pitch-up cuts grains short)
+INVTAB = 0x031600                        # SRAM: floor((2^23 - 1) / P) for P = 0..600
 
 
 def s24(v):
@@ -30,10 +31,13 @@ def st(v):
     return np.floor(v * Q) / Q
 
 
+def inv_table():
+    return [0] + [((1 << 23) - 1) // P for P in range(1, 601)]
+
+
 def recip(P):
-    """1/P as Q23 by restoring division, like the DSP loop (23 quotient bits)"""
-    num, q = 1 << 23, 0          # numerator 1.0 in units of 2^-23 * P... computed as integer: floor(2^23 / P)
-    return (num // P) & M24
+    """1/P as Q23, as the table holds it"""
+    return ((1 << 23) - 1) // P
 
 
 class PsolaDSP:
@@ -80,7 +84,7 @@ class PsolaDSP:
                 if bd is None or d < bd:
                     best, bd = m, d
             s = self.slot[self.rr]
-            self.rr = (self.rr + 1) & (NS - 1)
+            self.rr = 0 if self.rr + 1 == NS else self.rr + 1
             s.update(act=2 * P, tc=P, wv=0, dw=self.invp, pos=(best << 24) - Pf48)
         # grains
         acc = 0                                        # 56-bit accumulator in units of 2^-46 (Q23 * Q23)

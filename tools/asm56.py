@@ -111,6 +111,12 @@ class Asm:
             self.fix.append((len(self.w), label, ('jmp12', encode('Jcc_xxx', C=CC[cond], a=0))))
         self.w.append(0)
 
+    def jlong(self, cond, label):           # Jcc / JMP with a 24-bit address (2 words): code above P:$0FFF
+        if cond == 'T':
+            self.op('Jmp_ea', label=label, **EA_ABS)
+        else:
+            self.op('Jcc_ea', label=label, C=CC[cond], **EA_ABS)
+
     def jmp(self, label):                   # JMP absolute (2 words)
         self.op('Jmp_ea', label=label, **EA_ABS)
 

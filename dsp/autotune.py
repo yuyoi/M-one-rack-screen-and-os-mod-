@@ -28,7 +28,7 @@ N_HI, N_LO = 88, 36
 NN = N_HI - N_LO + 1
 SPEED = int(0.002 * (1 << 23))       # retune per frame (~11 ms): robotic-ish; 0.0002 = natural
 RING, DARR, SHBUF = 0x0400, 0x0800, 0x030000
-SPLIT = 4                            # AMDF lag spread over 4 frames (worst case ~+1325 -> ~+400 cycles)
+SPLIT = 8                            # AMDF lag spread over 8 frames (worst case ~+1325 -> ~+250 cycles)
 SUB, R0S, R4S, PSUM = 0x0890, 0x0891, 0x0892, 0x0893   # X long: split phase, saved pointers, partial sum
 DETF = 0x0894                        # X long: detector ran this frame (the kernel clears it every frame)
 
