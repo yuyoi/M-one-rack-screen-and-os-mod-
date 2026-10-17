@@ -21,11 +21,10 @@ import mod_ref as MR  # noqa: E402
 import filt_model as fm  # noqa: E402
 import filt_ref as FR  # noqa: E402
 import fxlab_pedals as XP  # noqa: E402
-import spring_ref as SPR  # noqa: E402
 
 FW = os.path.join(HERE, '..', 'firmware', 'mone_dev')
 STEPS1, STEPS2 = 101, 21
-FX_ID = {'dirt': 17, 'mod': 18, 'phaser': 19, 'wah': 20, 'spring': 21}       # proposed ids (VOCAL_ARCH.md, FX lab)
+FX_ID = {'dirt': 17, 'mod': 18, 'phaser': 19, 'wah': 20}       # ids agreed with the FX lab (VOCAL_ARCH.md); SPRING 21 has no P
 
 
 class Engine:
@@ -71,8 +70,6 @@ ENGINES = [
     Engine(dm.PEDALS, dm.knobs_default, _dirt_words, lambda n: [FX_ID['dirt']], curves=_dirt_curves),
     Engine(mm.PEDALS, mm.knobs_default, _mod_words, lambda n: [FX_ID['mod']], _mod_extra),
     Engine(fm.PEDALS, fm.knobs_default, _filt_words, lambda n: [FX_ID[fm.PEDALS[n]['fx']]], _filt_extra),
-    Engine(SPR.PEDALS, SPR.knobs_default, lambda n, kn: {SPR.PS + i: v for i, v in enumerate(SPR.ints(SPR.build(n, kn)))},
-           lambda n: [FX_ID['spring']]),
     Engine(XP.PEDALS, XP.knobs_default, XP.words, lambda n: XP.PEDALS[n]['chain']),      # the FX lab's engines
 ]
 

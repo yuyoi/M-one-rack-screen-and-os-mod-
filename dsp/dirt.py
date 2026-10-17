@@ -8,7 +8,7 @@ from AMP's SRAM table (loaded at boot) into Y:$0D00. Params and curves come from
 NST = 0 (nothing written yet) it passes the input through.
 Uses R0-R6 / M1-M3, M6 and puts the M registers back to linear before it returns.
 
-Memory (PROPOSED to the FX lab, not agreed yet): P $0E00-$0FFF, X $0900-$0D03, Y $0D00-$0D5F.
+Memory (agreed with the FX lab 2026-10-17, VOCAL_ARCH.md): P $0E00-$0FFF, X $0900-$0D03, Y $0D00-$0D5F.
   X:$0900 params (64, layout in dirt_ref.py)   X:$0940 state   X:$0980 upsampler ring (mod 16)
   X:$0990 dry delay ring (mod 16)               X:$09C0 decimator ring (mod 64)   X:$0A00-$0D02 3 x 257 curves
 Cycles: sim56 instructions per frame printed by model/sim_dirt.py (1 stage ~300, 3 stages ~600).

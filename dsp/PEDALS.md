@@ -4,7 +4,7 @@ Lineup = the GP-16 PEDAL/RIG list (30 pedals + 7 amps, `gp16/PEDAL_MODES.md`). K
 (not a forced 3); where the GP-16 had to fake one (Metal Zone mid, TR-2 wave, RE-201 heads) the real control is back.
 Pattern per engine = AMP's: circuit model (`model/<e>_model.py`, oversampled where it distorts), bit-exact fixed-point
 reference (`model/<e>_ref.py`), DSP code (`dsp/<e>.py`), sim56 test (`model/sim_<e>.py`, 0 LSB).
-**Nothing here has run on the hardware.** Memory and effect ids are a proposal to the FX lab (not agreed yet).
+**Nothing here has run on the hardware.** Memory and effect ids agreed with the FX lab 2026-10-17 (VOCAL_ARCH.md).
 
 ## Engines (one engine per circuit family, pedals = coefficient sets)
 Cycles: sim56 instructions per frame, measured; hardware estimate x1.3 (AMP: 1299 instr -> ~1690 cycles).
@@ -20,7 +20,8 @@ Budget 2112/frame, kernel + CLEAN ~85, AMP + kernel ~1770.
 | DELAY / REVERB / SHIMMER / SWELL | 13 / 12 / 14 / 15 (FX lab) | the FX lab's engines as they are: the pedal knobs are tables of their param words | Slapback, Digital, Space Echo (DELAY tape -> SPRING), Hall/Plate, Cathedral, Church, Stage, Cave (DELAY -> REVERB), Ambient (SWELL -> REVERB), Shimmer (SHIMMER -> REVERB) | FX lab | FX lab | 0 |
 | AMP | 6 | the AMP engine unchanged; 6 voicings = its words (stage gains, coupling / Miller per stage, tone-stack parts, defaults) + a cab IR each | Clean (Deluxe), Twin, JCM800, AC30, Doom, DI | ~1299 | ~1690 | 0 |
 
-*proposed ids. Board example (no AMP): TS -> CE-2 -> SPRING ~ 540 + 220 + 445 + 85 = ~1290 cycles.
+*ids agreed; SPRING is built and bit-exact but has no P RAM (sim only), so the SPRING pedal and Space Echo's tank
+use a small REVERB for now. Board example (no AMP): TS -> CE-2 -> REVERB ~ 540 + 220 + 470 + 85 = ~1320 cycles.
 A DIRT pedal into the full AMP does NOT fit (1770 + 540 > 2112). For RIG mode either DIRT gets optimised (its stage
 body is 39 instructions; ~25 is reachable with parallel moves) or RIG uses a lighter amp.
 
@@ -46,9 +47,9 @@ body is 39 instructions; ~25 is reachable with parallel moves) or RIG uses a lig
 | PHASE 90 | PHASER | SPEED BLOCK(switch: script / block feedback) |
 | CRYBABY | WAH | PEDAL (the treadle) |
 | RESO WAH | WAH, high Q | PEDAL RES |
-| SPRING | SPRING | DWELL TONE MIX |
+| SPRING | REVERB stopgap (SPRING engine: no P) | DWELL TONE MIX |
 | SLAPBACK / DIGITAL DLY | DELAY | TIME LEVEL / LEVEL FEEDBACK TIME |
-| SPACE ECHO | DELAY (tape) -> SPRING | MODE(1-5) RATE INTENSITY ECHO REVERB TONE (RE-201 BASS + TREBLE folded into TONE; heads ~ by MODE until DELAY has a 3-head mode) |
+| SPACE ECHO | DELAY (tape) -> REVERB | MODE(1-5) RATE INTENSITY ECHO REVERB TONE (RE-201 BASS + TREBLE folded into TONE; heads ~ by MODE until the FX lab's DELAY HEADS mode lands, then the real 12-position selector) |
 | HALL/PLATE, CATHEDRAL, CHURCH, STAGE | REVERB | DECAY TONE PRE-DLY LEVEL |
 | CAVE | DELAY -> REVERB | DECAY ECHO TONE LEVEL |
 | AMBIENT | SWELL -> REVERB | DECAY SWELL TONE LEVEL |
@@ -72,16 +73,16 @@ knobs (`label`, default 0..100, steps) and knob tables (`PdTab`: the knob(s), st
   (512 words to Y:$0800 + AMP's SRAM table X:$031C00), so they go to the ESP owner as data (amp_voicings.py).
 This plugs into `menu.h` PEDALS[] / PedalDef: a board knob = a `PdKnob` + its tables (the board draws 1-6 knobs).
 
-## Memory (PROPOSED to the FX lab 2026-10-17, NOT agreed; VOCAL_ARCH.md is the source of truth)
+## Memory (agreed with the FX lab 2026-10-17; VOCAL_ARCH.md is the source of truth)
 | What | P | X | Y / SRAM |
 |---|---|---|---|
 | DIRT | $0E00-$0EDD | $0900 params, $0940 state, $0980 up ring (16), $0990 dry ring (16), $09C0 down ring (64), $0A00-$0D02 3 curves | Y $0D00-$0D5F FIR (copied from AMP's SRAM table) |
 | MOD | $0EE0-$0FD4 | $0D10 params, $0D40 state, $0D80 ring B (64), $0E00-$0FFF ring A (512) | - |
-| PHASER / WAH | $0B80-$0BFB (tail after the kernel) | $0DC0-$0DFF | - |
-| SPRING | $0960-$09ED (test-program area) | $0888-$08DF | rings $038000-$038FFF (REVERB's buffer: never in one chain with REVERB) |
+| PHASER / WAH | $0960-$09DB (of $0960-$09FF) | $0DC0-$0DFF | - |
+| SPRING | none left (needs ~142 words) | (placeholder $0888) | would share REVERB's ring $038000 |
 
 ## Status (2026-10-17)
 - All engines bit-exact in sim56: `py -3.10 model/sim_dirt.py`, `sim_mod.py`, `sim_filt.py`, `sim_spring.py`,
   `amp_voicings.py`. DIRT reference vs its float circuit model: 46-82 dB SNR (`py -3.10 model/dirt_ref.py`).
-- Not on hardware; memory / ids not agreed; levels are first guesses (DIRT trimmed to ~-18 dBFS rms at the default
+- Not on hardware (needs the FX lab's os.py / boot wiring and the OTA handshake); levels are first guesses (DIRT trimmed to ~-18 dBFS rms at the default
   knobs with a hot DI; the rest by ear later).

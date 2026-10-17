@@ -4,8 +4,7 @@ model/filt_ref.py (same steps); voicings: model/filt_model.py; test: model/sim_f
 fx_phaser / fx_wah: sample in X1 -> out in X1. No init needed: the ESP's pedal pick writes the params and clears the
 state (zeros; the wah's PS = POS). With nothing written, both output 0 (DRY = WET = 0 / IG = 0).
 Uses R0, R4, R5 (left linear).
-Memory (PROPOSED to the FX lab): P $0B80-$0BFF (the free tail after the kernel: NOT agreed, the FX lab's call),
-X $0DC0-$0DFF.
+Memory (agreed with the FX lab 2026-10-17, VOCAL_ARCH.md): P $0960-$09FF, X $0DC0-$0DFF.
 """
 import os
 import sys
@@ -17,7 +16,7 @@ from asmh import H, MAC, MPY  # noqa: E402
 from dis56k import listing  # noqa: E402
 import filt_ref as FR  # noqa: E402
 
-BASE, END = 0x0B80, 0x0BFF
+BASE, END = 0x0960, 0x09FF
 PP, PS, PW, WS = FR.PP, FR.PS, FR.PW, FR.WS
 
 a = Asm(BASE)

@@ -5,7 +5,7 @@ voicings: model/mod_model.py; test: model/sim_mod.py (bit-exact). It calls DIRT'
 fx_mod: sample in X1 -> out in X1. First call: clears its state and both rings. The ESP writes the params and the
 voice start states when a pedal is picked (with nothing written, TGT = WET = 0: it outputs DRY * x = silence).
 Uses R0-R5, M1, M2 and puts them back to linear.
-Memory (PROPOSED to the FX lab): P $0EE0-$0FFF, X $0D10-$0D5F (params, state), $0D80-$0DBF (ring B),
+Memory (agreed with the FX lab 2026-10-17, VOCAL_ARCH.md): P $0EE0-$0FFF, X $0D10-$0D5F (params, state), $0D80-$0DBF (ring B),
 $0E00-$0FFF (ring A).
 """
 import os

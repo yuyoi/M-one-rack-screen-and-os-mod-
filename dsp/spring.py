@@ -4,8 +4,8 @@
 fx_spring: sample in X1 -> out in X1. First call: clears its state and both rings. The ESP writes the params when the
 pedal is picked (nothing written: MIX = DRY = 0, silence).
 Uses R0, R2, R4, R5, M2 (put back to linear).
-Memory (PROPOSED, NOT agreed with the FX lab): P $0960-$09FF (the test-program area: cycprobe / ms_on would move),
-X $0888-$08DF, rings X:$038000-$038FFF (REVERB's buffer: never in one chain with REVERB).
+NOT PLACED: P RAM has no room left for it (FX lab, 2026-10-17); sim only. The addresses below are placeholders
+(X $0888 overlaps autotune's longs): it needs ~142 words of P, 88 of X and 4K of SRAM (REVERB's ring).
 """
 import os
 import sys
