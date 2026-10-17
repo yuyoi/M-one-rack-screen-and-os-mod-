@@ -70,6 +70,22 @@ A 1.54" 240x240 ST7789 IPS on the ESP32-S3 (LovyanGFX). The front panel UI runs 
 (live inputs, WiFi IP and signal), a BUTTON TEST page, and an idle uwu face. 14 buttons (learned by position), 3 pots and
 an encoder. WiFi serial and OTA flashing, so no USB is needed once it's racked. Wiring and controls are in `USER_GUIDE.md`.
 
+It boots to a low-poly 3D MODE ring (software-rendered, PS1 style): VOCAL FX, PRESETS, PEDAL, SETTINGS, SYSTEM. EXIT
+steps back one page at a time and remembers where you were. The pictures are renders from the mockup scripts, drawn the
+same way the firmware draws them.
+
+![The MODE ring: singing cat, vinyl, '69 stompbox, chrome cog, bible](docs/screen/mode_ring.gif)
+![The PEDAL board stompbox](docs/screen/pedal3d.png)
+
+SETTINGS > SCENE swaps the background behind the ring (14 scenes, kept across reboots):
+
+![Castle and dungeon scenes](docs/screen/scenes_castle.png)
+![80s scenes: outrun, vaporwave, cyber city, matrix, tron, neon pink, inferno](docs/screen/scenes_80s.png)
+
+SETTINGS > THEME sets the menu colours: MATCH SCENE, or any of 14 fixed themes.
+
+![The 14 menu themes on the SETTINGS page](docs/screen/themes.png)
+
 ## Files
 | Path | What |
 |---|---|
