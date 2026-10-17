@@ -4,7 +4,7 @@
 #include <soc/soc.h>
 #include <soc/gpio_reg.h>
 
-const int PIN_POT[3] = {5, 6, 7};          // wipers; outer lugs 3V3 / GND
+const int PIN_POT[3] = {7, 6, 5};          // POT 1-3 = front left to right (GPIO 7 is the left knob); wipers, outer lugs 3V3 / GND
 const int PIN_LADDER[2] = {1, 2};          // own 10k to 3V3 each, buttons pull down through their own resistor
 const int PIN_ENC_A = 38, PIN_ENC_B = 39;  // common pin to GND
 const int PIN_BTN[9] = {48, 47, 21, 20, 19, 40, 41, 42, 14};  // direct buttons (pin -> button -> GND, internal pullup); any order

@@ -31,7 +31,7 @@ Check GND twice: on the first build the screen's GND went to 5 V and the screen 
 
 ## Wiring: controls
 ```
-POT 1-3   = GPIO 5, 6, 7  (wiper; outer lugs to 3V3 and GND, never 5 V)
+POT 1-3   = GPIO 7, 6, 5  (front left to right; wiper, outer lugs to 3V3 and GND, never 5 V)
             in a row on the left header. Lug order only flips direction.
 ENC A/B   = GPIO 38, 39   (middle pin to GND, no push switch, internal pullups)
 BUTTONS   = GPIO 48, 47, 21, 20, 19, 40, 41, 42, 14 (9 direct buttons, other leg to GND; any order, the learn maps them)
