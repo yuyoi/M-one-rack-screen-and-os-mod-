@@ -98,8 +98,9 @@ def tmb(l, m, t, comp='bassman'):
 
 
 def tmb_analog(l, m, t, comp='bassman'):
-    """The analog H(s) = (b1 s + b2 s^2 + b3 s^3) / (1 + a1 s + a2 s^2 + a3 s^3)."""
-    C1, C2, C3, R1, R2, R3, R4 = {
+    """The analog H(s) = (b1 s + b2 s^2 + b3 s^3) / (1 + a1 s + a2 s^2 + a3 s^3). comp = a name or the parts
+    (C1, C2, C3, R1, R2, R3, R4) themselves (amp_voicings.py)."""
+    C1, C2, C3, R1, R2, R3, R4 = comp if isinstance(comp, tuple) else {
         'bassman': (250e-12, 20e-9, 20e-9, 250e3, 1e6, 25e3, 56e3),
         'marshall': (470e-12, 22e-9, 22e-9, 220e3, 1e6, 22e3, 33e3)}[comp]
     b1 = t*C1*R1 + m*C3*R3 + l*(C1*R2 + C2*R2) + (C1*R3 + C2*R3)
