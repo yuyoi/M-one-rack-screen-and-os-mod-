@@ -20,7 +20,7 @@ bool onceReadXLong(const uint16_t *aa, uint32_t *value, int n);
 
 #include "presets.h"                        // generated: tools/gen_presets.py from dsp/presets.py
 
-enum { PAGE_FX, PAGE_TUNE, PAGE_SYS, PAGE_TEST, PAGE_EDIT, PAGE_PRESET, PAGE_MAIN, PAGE_PEDAL };
+enum { PAGE_FX, PAGE_TUNE, PAGE_SYS, PAGE_TEST, PAGE_EDIT, PAGE_PRESET, PAGE_MAIN, PAGE_PEDAL, PAGE_PKNOB };
 int uiPage = PAGE_MAIN;                     // boots on the MODE ring; EXIT steps back to it
 
 // What is playing (the ring's crown): VOCAL FX = the FX page's own setup, PRESETS = a preset, PEDAL = the pedal board
@@ -232,18 +232,25 @@ static void drawFX(uint32_t now) {
   statusOr(menu.cursor == 3 ? "T5:STRIP SETTINGS" : "KNOB:EDIT T6/B6:MOVE");
 }
 
-static void drawTune(uint32_t now) {
+static int masterPct = 40;                   // SETTINGS > MASTER: the pedal board's output level (40 = -24 dB)
+static void pdLoad();
+
+static void drawTune(uint32_t now) {         // six rows, five on screen (the window follows the cursor)
   backdrop();
   th::header("SETTINGS", now);
-  char v[16];
-  th::row(24, "TUNE KEY", KEY_NAMES[menu.key], tuneCur == 0, false, now, th::slide(now, pageT0, 0));
-  th::row(41, "SCALE", SCALE_NAMES[menu.scale], tuneCur == 1, false, now, th::slide(now, pageT0, 1));
+  pdLoad();
+  char v[16], m[12];
   snprintf(v, sizeof v, menu.speed >= 9 ? "%d ROBOT" : (menu.speed <= 2 ? "%d NATURAL" : "%d"), menu.speed);
-  th::row(58, "SPEED", v, tuneCur == 2, false, now, th::slide(now, pageT0, 2));
-  th::row(75, "SCENE", bg::SCENES[bg::sel].name, tuneCur == 3, false, now, th::slide(now, pageT0, 3));
-  th::row(92, "THEME", bg::themeName(), tuneCur == 4, false, now, th::slide(now, pageT0, 4));
+  if (masterPct < 2) snprintf(m, sizeof m, "OFF");
+  else snprintf(m, sizeof m, "%d DB", (int)lroundf(40.0f * (masterPct / 100.0f - 1.0f)));
+  const char *key[6] = {"TUNE KEY", "SCALE", "SPEED", "SCENE", "THEME", "MASTER"};
+  const char *val[6] = {KEY_NAMES[menu.key], SCALE_NAMES[menu.scale], v, bg::SCENES[bg::sel].name, bg::themeName(), m};
+  int first = constrain(tuneCur - 4, 0, 1);
+  for (int i = first; i < first + 5; i++)
+    th::row(24 + (i - first) * 17, key[i], val[i], tuneCur == i, false, now, th::slide(now, pageT0, i - first));
   bool on = menu.fx1 == 4 || (menu.mode != 0 && menu.fx2 == 4);
-  statusOr(tuneCur == 4 ? "MENU COLOURS" : tuneCur == 3 ? "THE MODE RING'S LOOK" : on ? "KNOB:EDIT T6/B6:MOVE" : "TUNE IS NOT PLAYING");
+  statusOr(tuneCur == 5 ? "PEDAL BOARD OUTPUT" : tuneCur == 4 ? "MENU COLOURS" : tuneCur == 3 ? "THE MODE RING'S LOOK" :
+           on ? "KNOB:EDIT T6/B6:MOVE" : "TUNE IS NOT PLAYING");
 }
 
 extern bool dspAwake;                        // face.h: the power switch says the DSP runs
@@ -279,7 +286,8 @@ static void drawSys(uint32_t now) {
 
 static void drawEdit(uint32_t now);         // below, with the effect settings
 static void drawPreset(uint32_t now);       // below, with the presets
-static void drawMain(uint32_t now);         // below: the MODE ring (ring3d.h)
+static void drawMain(uint32_t now);
+static void drawPknob(uint32_t now);         // below: a sim's knob list         // below: the MODE ring (ring3d.h)
 void pedalPageDraw(uint32_t now);           // face.h: the PEDAL board (needs the singing level for its LED)
 
 void uiRedraw(uint32_t now) {
@@ -292,6 +300,7 @@ void uiRedraw(uint32_t now) {
   else if (uiPage == PAGE_PRESET) drawPreset(now);
   else if (uiPage == PAGE_MAIN) drawMain(now);
   else if (uiPage == PAGE_PEDAL) pedalPageDraw(now);
+  else if (uiPage == PAGE_PKNOB) drawPknob(now);
   else drawTest(now);
   uint32_t t = millis();
   uiLastDrawMs = t - t0;
@@ -360,7 +369,8 @@ static const uint8_t POT_AA[4] = {0x2F, 0x3D, 0x3E, 0x3C};   // dry gain, wet ga
 static int potSent[3] = {-9999, -9999, -9999};
 static int potSig = -1;                     // which pot mapping the last pot words used (potMapSig)
 static bool fxInPath(int fx);
-static int pedalPots();                      // PEDAL board: bit 0 = POT2 is the pedal's MIX, bit 1 = POT3 its TONE
+static int pedalPots();                      // PEDAL board: -1 = off it; AMP 0; 4 = a sim (output stage = MASTER)
+static uint32_t masterWord();
 
 static uint32_t q23(float x) { return (uint32_t)lroundf(constrain(x, 0.0f, 0.99999988f) * 8388608.0f) & 0xFFFFFF; }
 
@@ -375,7 +385,7 @@ static void potFill(const int *mv, uint32_t *v) {
   v[0] = mix ? q23(1.0f - p[1]) : 0;         // linear crossfade: CLEAN stays at the same level at any mix
   v[1] = mix ? q23(p[1]) : 0x7FFFFF;         // a pedal without a MIX knob (and AMP) plays all wet, tone open
   v[2] = tone ? q23(k) : 0x7FFFFF;
-  v[3] = q23(vol);
+  v[3] = pp == 4 ? masterWord() : q23(vol);   // a sim on the board: SETTINGS > MASTER
 }
 
 // ---- Effect settings: long X writes into each effect's param block (VOCAL_ARCH.md "Param maps"). T5 = EDIT page.
@@ -585,6 +595,14 @@ static int stripEqFill(uint16_t *aa, uint32_t *w, int n) {
   return n;
 }
 
+// STRIP's low cut X:$027A-$027E (strip_model.LC, same /2 format as the EQ): the vocal 100 Hz high-pass. The pedal
+// board's gate writes it flat; every full STRIP push puts the vocal one back.
+static int stripLcFill(uint16_t *aa, uint32_t *w, int n) {
+  static const uint32_t LC[5] = {0x3F5BBE, 0x814884, 0x3F5BBE, 0x7EB5D7, 0xC146DE};
+  for (int i = 0; i < 5; i++) { aa[n] = 0x027A + i; w[n++] = LC[i]; }
+  return n;
+}
+
 static bool fxInPath(int fx) {
   if (menu.mode == 3) {                      // CHAIN: in the list (B1 bypasses the whole chain)
     for (int i = 0; i < menu.chainN; i++) if (menu.chain[i] == fx) return !menu.byp1;
@@ -749,8 +767,8 @@ static void drawEdit(uint32_t now) {
 
 // Every effect's settings in one halt (after a boot, with the rest of the panel state)
 static bool pushParams() {
-  uint16_t aa[128];
-  uint32_t w[128];
+  uint16_t aa[160];
+  uint32_t w[160];
   int n = 0;
   if (menu.mode == 3) {                                   // CHAIN: the list
     aa[n] = 0x0200; w[n++] = menu.chainN;
@@ -762,7 +780,7 @@ static bool pushParams() {
       if (ps.p[i].addr) { aa[n] = ps.p[i].addr; w[n++] = paramWord(ps.p[i]); }
   }
   n = harmMapFill(1, aa, w, harmMapFill(0, aa, w, n));    // HARMONY maps (key from the TUNE page)
-  n = stripEqFill(aa, w, n);
+  n = stripLcFill(aa, w, stripEqFill(aa, w, n));
   aa[n] = 0x0283; w[n++] = q23(0.9995f);                  // reverb bandwidth (fixed, as reverb_model.params)
   aa[n] = 0x0287; w[n++] = revDd2();
   aa[n] = 0x02C0; w[n++] = grainDph();
@@ -779,6 +797,7 @@ static int potMapSig() { return (pedalPots() + 1) * 2 + fxInPath(6); }   // chan
 
 void potsToDsp(const int *mv) {
   static uint32_t last = 0;
+  if (pedalPots() == 4) return;               // a sim on the board: the pots are its knobs (pedalTick)
   bool amp = fxInPath(6), moved[3], any = potMapSig() != potSig;
   for (int k = 0; k < 3; k++) { moved[k] = abs(mv[k] - potSent[k]) > 40; any = any || moved[k]; }
   if (!any || millis() - last < 100 || !dspAwake || learnIdx >= 0) return;
@@ -1097,44 +1116,247 @@ static void navBack() {
   else if (uiPage != PAGE_MAIN) navSet(PAGE_MAIN, 0);
 }
 
-// ---- PEDAL board: guitar pedals, each drawn with its own knobs. The knob (or T6 / B6) swaps pedals; the sound
-// follows once the knob rests. POT1 = level on every pedal; POT2 / POT3 = the pedal's own knobs where it has them
-// (AMP: GAIN / TREBLE, its other knobs come from its EDIT page). The real-pedal sims come next (DSP).
+// ---- PEDAL board: the guitar pedal sims (pedals_dsp.h, generated by tools/gen_pedals.py; dsp/PEDALS.md), then AMP.
+// The knob (or T6 / B6) swaps pedals; the sound follows once the knob rests. The pots are the pedal's first three
+// knobs, left to right: a pot takes over its knob only once it moves, and a knob keeps what it was set to. ENTER = the
+// knob list: T6 / B6 pick a knob, the encoder steps it, or turn any pot and the knob snaps to it. B1 = the footswitch.
+// SETTINGS > MASTER is the output level. Knob settings are kept per pedal (NVS "ui"/"pdpos").
+#include "pedals_dsp.h"
+
 enum { SRC_POT1, SRC_POT2, SRC_POT3, SRC_AMP };  // SRC_AMP + row = an ampP row
 struct PedalKnob { const char *label; uint8_t src; };
 struct PedalDef { uint8_t fx; const char *name; uint32_t col; uint8_t nk; PedalKnob k[6]; };
-static const PedalDef PEDALS[] = {
-  {1, "HEAVY", 0xFF6A00, 2, {{"LEVEL", SRC_POT1}, {"TONE", SRC_POT3}}},
-  {3, "COMP", 0x2A6CFF, 2, {{"LEVEL", SRC_POT1}, {"BLEND", SRC_POT2}}},
-  {2, "REVERSE", 0x9A3CE0, 3, {{"LEVEL", SRC_POT1}, {"MIX", SRC_POT2}, {"TONE", SRC_POT3}}},
-  {6, "AMP", 0xE01818, 6, {{"LEVEL", SRC_POT1}, {"GAIN", SRC_AMP + 1}, {"BASS", SRC_AMP + 2}, {"MID", SRC_AMP + 3},
-                           {"TREB", SRC_AMP + 4}, {"PRES", SRC_AMP + 5}}},
-};
-static const int N_PEDALS = sizeof PEDALS / sizeof PEDALS[0];
-static int pedalIdx = 1;                 // COMP: the gentlest first
+static const PedalDef AMP_PEDAL = {6, "AMP", 0xE01818, 6, {{"LEVEL", SRC_POT1}, {"GAIN", SRC_AMP + 1}, {"BASS", SRC_AMP + 2},
+                                   {"MID", SRC_AMP + 3}, {"TREB", SRC_AMP + 4}, {"PRES", SRC_AMP + 5}}};
+static const int N_PEDALS = PD_N + 1;          // the sims, then AMP
+const int BOARD_FX = 1000;                      // idlePedal(): BOARD_FX + i = board pedal i
+static int pedalIdx = 0;                        // TUBE SCREAMER first (NVS "ui"/"pedal" after that)
 static int pedalPrev = -1, pedalPending = -1, pedalDir = 1;
 static uint32_t pedalAt = 0, pedalSwapT = 0;
+static int pdPlaying = -1;                      // the sim the DSP plays (its pick went through), -1 = none
+static bool pdByp = false;                      // B1: the sim is bypassed (CLEAN), its state kept
+static uint8_t pdPos[PD_N][6];                  // knob positions 0..100 per pedal
+static bool pdLoaded = false;
+static uint32_t pdSaveAt = 0;                   // a pending NVS save (2 s after the last change)
+static uint8_t pdDirty = 0;                     // knobs whose words still have to go out (bit = knob)
+static uint32_t pdSendAt = 0;
+static int pknobCur = 0;                        // the knob list's cursor
+static int pdPotRef[3], pdPotMv[3];             // a pot takes over once it leaves where it was when armed
+static bool pdPotOwn[3];
+static bool gateOn = false;                     // B2 on the board: the input gate (NVS "ui"/"gate")
+static int gateDb = -50;                        // its threshold, -80..-20 dB (the knob list's last row; "ui"/"gthr")
+static bool gateDirty = false;
 
-static int pedalPots() {
-  if (uiMode != MODE_PEDAL || menu.mode != 0 || menu.fx1 != PEDALS[pedalIdx].fx) return -1;
-  int m = 0;
-  for (int i = 0; i < PEDALS[pedalIdx].nk; i++) {
-    if (PEDALS[pedalIdx].k[i].src == SRC_POT2) m |= 1;
-    if (PEDALS[pedalIdx].k[i].src == SRC_POT3) m |= 2;
-  }
-  return m;
+// The input gate = STRIP as a gate only (before the pedal): no de-esser, leveler, drive, EQ or low cut (the vocal
+// 100 Hz cut would thin a low E). STRIP X:$0270-$027E: GATE, DEESS, COMP, MK/4, DRIVE, EQ (5), LC (5); X:$0207 on.
+static int gateFill(uint16_t *a, uint32_t *v, int n) {
+  static const uint32_t W[15] = {0, 0x7FFFFF, 0x7FFFFF, 0x200000, 0, 0x400000, 0, 0, 0, 0, 0x400000, 0, 0, 0, 0};
+  for (int i = 0; i < 15; i++) { a[n] = 0x0270 + i; v[n++] = W[i]; }
+  v[n - 15] = q23(powf(10.0f, gateDb / 20.0f));
+  a[n] = 0x0207; v[n++] = gateOn;
+  return n;
 }
 
-float pedalKnobVal(const PedalKnob &k) {          // 0..1 for the drawing
+static void gateSet(bool on, int db) {
+  db = constrain(db, -80, -20);
+  if (on == gateOn && db == gateDb) return;
+  gateOn = on;
+  gateDb = db;
+  gateDirty = true;                               // goes out from pedalTick
+  pdSaveAt = millis() + 2000;
+  uiDirty = true;
+}
+
+static void gateToggle() {                      // B2 on a sim
+  gateSet(!gateOn, gateDb);
+  char s[24];
+  snprintf(s, sizeof s, gateOn ? "GATE ON %d DB" : "GATE OFF", gateDb);
+  displayStatus(s, gateOn ? 0x30D060 : th::STEEL_L);
+}
+
+static const char *pedalName(int i) { return i < PD_N ? PD_PEDALS[i].name : AMP_PEDAL.name; }
+static uint32_t pedalCol(int i) { return i < PD_N ? PD_PEDALS[i].col : AMP_PEDAL.col; }
+static int pedalNk(int i) { return i < PD_N ? PD_PEDALS[i].nk : AMP_PEDAL.nk; }
+static const char *plateName(int i) {           // the name plate fits ~11 characters
+  return i < PD_N && !strcmp(PD_PEDALS[i].name, "TUBE SCREAMER") ? "TS-808" : pedalName(i);
+}
+
+static const char *knobShort(const char *l) {   // under a drawn knob: 5 characters at most
+  static const char *const SHORT[][2] = {{"VOLUME", "VOL"}, {"DISTORTION", "DIST"}, {"SUSTAIN", "SUST"}, {"MIDDLE", "MID"},
+      {"MIDFREQ", "FREQ"}, {"TREBLE", "TREB"}, {"OUTPUT", "OUT"}, {"INTENSITY", "INTEN"}, {"FEEDBACK", "FDBK"},
+      {"PRE-DLY", "PRE"}, {"SHIMMER", "SHIM"}, {"MANUAL", "MAN"}, {"REVERB", "REV"}, {"BOTTOM", "BOTTM"}, {"FILTER", "FILTR"}};
+  for (auto &s : SHORT) if (!strcmp(l, s[0])) return s[1];
+  return l;
+}
+
+static void pdLoad() {                          // knob settings, MASTER and the last pedal from NVS
+  if (pdLoaded) return;
+  pdLoaded = true;
+  for (int i = 0; i < PD_N; i++)
+    for (int k = 0; k < PD_PEDALS[i].nk; k++) pdPos[i][k] = PD_PEDALS[i].k[k].def;
+  Preferences pr;
+  pr.begin("ui", true);
+  if (pr.isKey("pdpos") && pr.getBytesLength("pdpos") == sizeof pdPos) pr.getBytes("pdpos", pdPos, sizeof pdPos);
+  masterPct = constrain(pr.getInt("master", 40), 0, 100);
+  pedalIdx = constrain(pr.getInt("pedal", 0), 0, N_PEDALS - 1);
+  gateOn = pr.getBool("gate", false);
+  gateDb = constrain(pr.getInt("gthr", -50), -80, -20);
+  pr.end();
+}
+
+static void pdSave() {
+  Preferences pr;
+  pr.begin("ui", false);
+  pr.putBytes("pdpos", pdPos, sizeof pdPos);
+  pr.putInt("master", masterPct);
+  pr.putInt("pedal", pedalIdx);
+  pr.putBool("gate", gateOn);
+  pr.putInt("gthr", gateDb);
+  pr.end();
+}
+
+static uint32_t masterWord() {                  // MASTER 0..100 -> X:$3C: 40 dB audio taper like POT 1, 0-1 = off
+  float p = masterPct / 100.0f;
+  return p < 0.02f ? 0 : q23(powf(10.0f, 2.0f * (p - 1.0f)));
+}
+
+static void masterSet(int pct) {                // SETTINGS > MASTER: heard at once on the board
+  masterPct = constrain(pct, 0, 100);
+  pdSaveAt = millis() + 2000;
+  if (uiMode == MODE_PEDAL && pdPlaying >= 0) {
+    uint16_t a = 0x3C;
+    uint32_t v = masterWord();
+    onceWriteXLong(&a, &v, 1);
+  }
+}
+
+static int pedalPots() {        // -1 = not on the board; 4 = a sim (the pots are its knobs, the output stage MASTER); AMP: 0
+  if (uiMode != MODE_PEDAL) return -1;
+  if (pedalIdx < PD_N) return pdPlaying == pedalIdx ? 4 : -1;
+  return menu.mode == 0 && menu.fx1 == AMP_PEDAL.fx ? 0 : -1;
+}
+
+float pedalKnobVal(const PedalKnob &k) {          // AMP's knobs, 0..1 for the drawing
   if (k.src <= SRC_POT3) return constrain(sysMv[k.src] / 3100.0f, 0.0f, 1.0f);
   const FxParam &p = ampP[k.src - SRC_AMP];
   return (p.v - p.lo) / (float)(p.hi - p.lo);
 }
 
-static void pedalApply(int idx) {                 // SINGLE + this pedal, its pot words and settings
-  const PedalDef &pd = PEDALS[idx];
-  menu.mode = 0; menu.fx1 = pd.fx; menu.byp1 = false; menu.preset = -1;
+static float boardKnobVal(int i, int k) { return i < PD_N ? pdPos[i][k] / 100.0f : pedalKnobVal(AMP_PEDAL.k[k]); }
+static const char *boardKnobLabel(int i, int k) { return knobShort(i < PD_N ? PD_PEDALS[i].k[k].label : AMP_PEDAL.k[k].label); }
+static bool boardByp(int i) { return i < PD_N ? pdByp : menu.byp1; }
+
+// One knob table's words at the knobs' positions (1-D: val[step * nw + w], 2-D: val[(s0 * steps1 + s1) * nw + w])
+static int pdTabRow(const PdDef &p, int t, const uint8_t *pos, uint16_t *a, uint32_t *v) {
+  const PdTab &tb = p.tab[t];
+  int row = (pos[tb.k[0]] * (tb.steps[0] - 1) + 50) / 100;
+  if (tb.nk == 2) row = row * tb.steps[1] + (pos[tb.k[1]] * (tb.steps[1] - 1) + 50) / 100;
+  for (int w = 0; w < tb.nw; w++) { a[w] = tb.addr[w]; v[w] = tb.val[row * tb.nw + w]; }
+  return tb.nw;
+}
+
+// Pick a sim: route to CLEAN, write its param block, knob tables and curves (chunks of 128 words a halt), then INITF,
+// the output stage (all wet, tone open, MASTER), STRIP off and the routing in the last halt: nothing half-written plays,
+// and the engine re-inits on its next frame (DIRT X:$097F / MOD X:$0D5F = 0), so the old pedal's tail never sounds.
+static uint16_t pkA[800];
+static uint32_t pkV[800];
+
+static bool pdPick(int i) {
+  pdLoad();
+  const PdDef &p = PD_PEDALS[i];
+  uint16_t ra[3] = {0x20, 0x21, 0x3C};
+  uint32_t rv[3] = {0, 0, 0};                     // CLEAN and muted: the halts below then repeat silence, not a buzz
+  if (!onceWriteXLong(ra, rv, 3)) return false;
+  delayMicroseconds(300);                         // ~13 samples: the mute reaches the DAC before the next halt
+  pdPlaying = -1;
+  uint16_t fa[48];
+  uint32_t fv[48];
+  int n = 0, nf = 0;
+  auto put = [&](uint16_t a, uint32_t v) {
+    if (a == 0x097F || a == 0x0D5F) { fa[nf] = a; fv[nf++] = v; }
+    else if (n < 800) { pkA[n] = a; pkV[n++] = v; }
+  };
+  for (int j = 0; j < p.ninit; j++) put(p.ia[j], p.iv[j]);
+  for (int t = 0; t < p.ntab; t++) {
+    uint16_t a[8];
+    uint32_t v[8];
+    int m = pdTabRow(p, t, pdPos[i], a, v);
+    for (int w = 0; w < m; w++) put(a[w], v[w]);
+  }
+  for (int c = 0; c < p.ncurve; c++)
+    for (int j = 0; j < 257; j++) put(p.curve[c].addr + j, p.curve[c].val[j]);
+  for (int s = 0; s < n; s += 128)
+    if (!onceWriteXLong(pkA + s, pkV + s, min(128, n - s))) return false;
+  auto fin = [&](uint16_t a, uint32_t v) { fa[nf] = a; fv[nf++] = v; };
+  nf = gateFill(fa, fv, nf);                      // STRIP = the input gate only (on with B2), never the vocal chain
+  fin(0x2F, 0); fin(0x3D, 0x7FFFFF); fin(0x3E, 0x7FFFFF); fin(0x3C, masterWord());
+  if (p.nfx == 1) { fin(0x20, 0); fin(0x21, p.fx[0]); }
+  else { fin(0x0200, p.nfx); for (int k = 0; k < p.nfx; k++) fin(0x0201 + k, p.fx[k]); fin(0x20, 3); }
+  if (!onceWriteXLong(fa, fv, nf)) return false;
+  pdPlaying = i;
+  pdByp = false;
+  pdDirty = 0;
+  gateDirty = false;
+  menu.strip = gateOn;
+  return true;
+}
+
+static void pdSendKnob(int i, int k) {          // a knob's table rows (1-8 long X writes each), one halt
+  const PdDef &p = PD_PEDALS[i];
+  uint16_t a[32];
+  uint32_t v[32];
+  int n = 0;
+  for (int t = 0; t < p.ntab && n <= 24; t++)
+    if (p.tab[t].k[0] == k || (p.tab[t].nk == 2 && p.tab[t].k[1] == k)) n += pdTabRow(p, t, pdPos[i], a + n, v + n);
+  if (n) onceWriteXLong(a, v, n);
+}
+
+static void pdSet(int k, int pos) {             // a knob of the shown sim moves (pot or encoder)
+  int i = pedalIdx;
+  if (i < PD_N && k == PD_PEDALS[i].nk) {         // the knob list's GATE row: far left = off
+    gateSet(pos >= 3, -80 + pos * 60 / 100);
+    return;
+  }
+  if (i >= PD_N || k < 0 || k >= PD_PEDALS[i].nk) return;
+  pos = constrain(pos, 0, 100);
+  if (pdPos[i][k] == pos) return;
+  pdPos[i][k] = pos;
+  pdSaveAt = millis() + 2000;
+  if (pdPlaying == i) pdDirty |= 1 << k;          // goes out from pedalTick, at most every 25 ms
+  uiDirty = true;
+}
+
+static void pdPotsArm() {                       // the pots let go: each takes over again only once it moves
+  for (int p = 0; p < 3; p++) { pdPotRef[p] = pdPotMv[p] = sysMv[p]; pdPotOwn[p] = false; }
+}
+
+static void pdBypass() {                        // B1 on a sim = its footswitch: CLEAN <-> the pedal (state kept)
+  const PdDef &p = PD_PEDALS[pdPlaying];
+  uint16_t a[2] = {0x20, 0x21};
+  uint32_t v[2] = {0, 0};
+  int n = 2;
+  if (pdByp && p.nfx == 1) v[1] = p.fx[0];
+  if (pdByp && p.nfx > 1) { v[0] = 3; n = 1; }    // the chain list is still in X:$0200..
+  bool ok = onceWriteXLong(a, v, n);
+  if (ok) pdByp = !pdByp;
+  displayStatus(!ok ? "DSP NOT ANSWERING" : pdByp ? "PEDAL BYPASSED" : "PEDAL ON", ok ? 0x30D060 : th::RED);
+  uiDirty = true;
+}
+
+static void pedalApply(int idx) {                 // play board pedal idx
   uiMode = MODE_PEDAL;
+  menu.preset = -1;
+  pdSaveAt = millis() + 2000;                     // remembered as the last pedal
+  if (idx < PD_N) {                               // a sim: the ESP's mode / FX1 say CLEAN (ids 17+ have no FX page)
+    menu.mode = 0; menu.fx1 = 0; menu.byp1 = false;
+    bool ok = pdPick(idx);
+    pdPotsArm();
+    displayStatus(ok ? PD_PEDALS[idx].name : "DSP NOT ANSWERING", ok ? PD_PEDALS[idx].col : th::RED);
+    return;
+  }
+  pdPlaying = -1;
+  const PedalDef &pd = AMP_PEDAL;                 // AMP: SINGLE + effect 6, the pots its LEVEL / GAIN / TREBLE
+  menu.mode = 0; menu.fx1 = pd.fx; menu.byp1 = false;
   uint8_t aa[6] = {0x20, 0x21, POT_AA[0], POT_AA[1], POT_AA[2], POT_AA[3]};
   uint32_t v[6] = {0, pd.fx};
   potFill(sysMv, v + 2);
@@ -1145,11 +1367,11 @@ static void pedalApply(int idx) {                 // SINGLE + this pedal, its po
 }
 
 static void pedalOpen() {
+  pdLoad();
   navGo(PAGE_PEDAL);
-  for (int i = 0; i < N_PEDALS; i++)              // already playing one of the pedals: stay on it
-    if (menu.mode == 0 && menu.preset < 0 && PEDALS[i].fx == menu.fx1) pedalIdx = i;
   pedalPrev = -1;
   pedalPending = -1;
+  if (uiMode == MODE_PEDAL && pedalIdx < PD_N && pdPlaying == pedalIdx) { pdPotsArm(); return; }   // already playing
   pedalApply(pedalIdx);
 }
 
@@ -1163,12 +1385,93 @@ static void pedalKnob(int d) {
   pedalAt = millis();
 }
 
-void pedalTick() {                                // every loop: the sound follows once the knob rests
-  if (pedalPending < 0 || millis() - pedalAt < 250) return;
-  int i = pedalPending;
-  pedalPending = -1;
-  pedalApply(i);
-  uiDirty = true;
+void pedalTick() {                                // every loop: pedal swaps, the pots, knob words, the NVS save
+  uint32_t now = millis();
+  if (pedalPending >= 0 && now - pedalAt >= 250) {      // the sound follows once the knob rests
+    int i = pedalPending;
+    pedalPending = -1;
+    pedalApply(i);
+    uiDirty = true;
+  }
+  bool board = uiMode == MODE_PEDAL && pedalIdx < PD_N && pedalPending < 0 && (uiPage == PAGE_PEDAL || uiPage == PAGE_PKNOB);
+  for (int p = 0; board && p < 3; p++) {
+    int mv = sysMv[p];
+    if (!pdPotOwn[p]) {
+      if (abs(mv - pdPotRef[p]) < 150) continue;        // not moved yet: the knob keeps its setting
+      pdPotOwn[p] = true;
+    }
+    if (abs(mv - pdPotMv[p]) < 20) continue;            // ADC jitter
+    pdPotMv[p] = mv;
+    int pos = constrain((mv * 100 + 1550) / 3100, 0, 100);
+    pdSet(uiPage == PAGE_PKNOB ? pknobCur : p, pos);    // the knob list: any pot snaps the chosen knob
+  }
+  if (pdDirty && pdPlaying >= 0 && now - pdSendAt >= 25) {
+    pdSendAt = now;
+    for (int k = 0; k < 6; k++)
+      if (pdDirty & (1 << k)) pdSendKnob(pdPlaying, k);
+    pdDirty = 0;
+  }
+  if (gateDirty && pdPlaying >= 0 && uiMode == MODE_PEDAL && now - pdSendAt >= 25) {
+    pdSendAt = now;
+    gateDirty = false;
+    uint16_t a[16];
+    uint32_t v[16];
+    if (onceWriteXLong(a, v, gateFill(a, v, 0))) menu.strip = gateOn;
+  }
+  if (pdSaveAt && (int32_t)(now - pdSaveAt) >= 0) { pdSaveAt = 0; pdSave(); }
+}
+
+// The knob list (ENTER on a sim): every knob as a row
+static void pknobOpen() {
+  navGo(PAGE_PKNOB);
+  pknobCur = constrain(pknobCur, 0, pedalNk(pedalIdx));   // the last row is GATE
+  pdPotsArm();
+}
+
+static void pknobMove(int d) {
+  pknobCur = wrapv(pknobCur + d, pedalNk(pedalIdx) + 1);
+  pdPotsArm();                                    // the knob left behind keeps what the pot set
+}
+
+static void pknobStep(int d) {                  // the encoder: 2 per click, switches toggle, mode knobs step
+  if (pedalIdx >= PD_N) return;
+  if (pknobCur == PD_PEDALS[pedalIdx].nk) {       // GATE: 1 dB a click; past -80 = off, a click up from off = on
+    if (!gateOn) { if (d > 0) gateSet(true, gateDb); }
+    else if (gateDb + d < -80) gateSet(false, gateDb);
+    else gateSet(true, gateDb + d);
+    return;
+  }
+  const PdKnob &k = PD_PEDALS[pedalIdx].k[pknobCur];
+  int pos = pdPos[pedalIdx][pknobCur];
+  if (k.steps <= 12) {
+    int s = (pos * (k.steps - 1) + 50) / 100;
+    s = k.steps == 2 ? (s + (d & 1)) % 2 : constrain(s + d, 0, k.steps - 1);
+    pos = s * 100 / (k.steps - 1);
+  } else pos += 2 * d;
+  pdSet(pknobCur, pos);
+}
+
+static void pknobText(const PdKnob &k, int pos, char *s, int n) {
+  if (k.steps == 2) snprintf(s, n, pos >= 50 ? "ON" : "OFF");
+  else if (k.steps <= 12) snprintf(s, n, "%d", (pos * (k.steps - 1) + 50) / 100 + 1);
+  else snprintf(s, n, "%d", pos);
+}
+
+static void drawPknob(uint32_t now) {
+  backdrop();
+  if (pedalIdx >= PD_N) return;
+  const PdDef &p = PD_PEDALS[pedalIdx];
+  th::header(plateName(pedalIdx), now);
+  int rows = p.nk + 1, first = constrain(pknobCur - 4, 0, max(0, rows - 5));
+  for (int i = first; i < rows && i < first + 5; i++) {
+    char v[12];
+    if (i < p.nk) pknobText(p.k[i], pdPos[pedalIdx][i], v, sizeof v);
+    else if (gateOn) snprintf(v, sizeof v, "%d DB", gateDb);
+    else snprintf(v, sizeof v, "OFF");
+    th::row(24 + (i - first) * 17, i < p.nk ? p.k[i].label : "GATE", v, i == pknobCur, false, now,
+            th::slide(now, pageT0, i - first));
+  }
+  statusOr(pdByp ? "BYPASSED (B1)" : pknobCur == p.nk ? "INPUT GATE, B2: ON/OFF" : "POT:SNAP T6/B6:MOVE");
 }
 
 // ---- MODE ring: VOCAL FX, PRESETS, PEDAL, SETTINGS, SYSTEM (ring3d.h draws it)
@@ -1204,7 +1507,7 @@ static void drawMain(uint32_t now) {
   r3::drawRing(now, ringPos - 5 * floorf(ringTarget / 5.0f), uiMode, arrive, MAIN_NAMES);
   char s[24];                                     // what is playing
   if (uiMode == MODE_PRESETS && menu.preset >= 0) snprintf(s, sizeof s, "> %02d %s", PRESETS[menu.preset].n, PRESETS[menu.preset].name);
-  else if (uiMode == MODE_PEDAL) snprintf(s, sizeof s, "> PEDAL %s", PEDALS[pedalIdx].name);
+  else if (uiMode == MODE_PEDAL) snprintf(s, sizeof s, "> %s", pedalName(pedalIdx));
   else if (menu.mode == 0) snprintf(s, sizeof s, "> %s", menu.byp1 ? "BYPASS" : FX_NAMES[menu.fx1]);
   else snprintf(s, sizeof s, "> %s%s%s", FX_SHORT[menu.fx1], menu.mode == 1 ? "+" : ">", FX_SHORT[menu.fx2]);
   statusOr(s);
@@ -1241,10 +1544,14 @@ void uiAdoptDsp() {
                 menu.strip, menu.preset >= 0 ? PRESETS[menu.preset].n : 0);
 }
 
-static void stripSet(bool on) {            // the FX page's STRIP row
-  uint16_t aa = 0x0207;
-  uint32_t w = on;
-  bool ok = onceWriteXLong(&aa, &w, 1);
+static void stripSet(bool on) {            // the FX page's STRIP row: the vocal settings (the board's gate may have
+  uint16_t aa[16];                         // left its own), then on / off
+  uint32_t w[16];
+  int n = 0;
+  for (int i = 0; i < 5; i++) { aa[n] = stripP[i].addr; w[n++] = paramWord(stripP[i]); }
+  n = stripLcFill(aa, w, stripEqFill(aa, w, n));
+  aa[n] = 0x0207; w[n++] = on;
+  bool ok = onceWriteXLong(aa, w, n);
   if (ok) menu.strip = on;
   displayStatus(ok ? (on ? "STRIP ON" : "STRIP OFF") : "DSP NOT ANSWERING", ok ? 0x30D060 : th::RED);
 }
@@ -1263,6 +1570,7 @@ bool uiPushAll() {
   memcpy(aa + 16, POT_AA, 4);
   potFill(mv, v + 16);
   bool ok = onceWriteXMany(aa, v, 20) && pushParams() && (!pr || applyPreset(menu.preset));
+  if (ok && pedalPots() == 4) ok = pdPick(pdPlaying);   // a sim on the board: pick it again
   if (ok) { for (int k = 0; k < 3; k++) potSent[k] = mv[k]; potSig = potMapSig(); }
   displayStatus(ok ? "PANEL -> DSP" : "DSP NOT ANSWERING", ok ? 0x30D060 : th::RED);
   return ok;
@@ -1272,6 +1580,7 @@ bool uiPushAll() {
 static void uiChange(int d) {
   if (uiPage == PAGE_MAIN) { mainMove(d); uiShow(); return; }
   if (uiPage == PAGE_PEDAL) { pedalKnob(d); uiShow(); return; }
+  if (uiPage == PAGE_PKNOB) { pknobStep(d); uiShow(); return; }
   if (uiPage == PAGE_EDIT) { editChange(d); if (menu.preset >= 0) presetDirty = true; uiShow(); return; }
   if (uiPage == PAGE_PRESET) { presetKnob(d); uiShow(); return; }
   int c = uiPage == PAGE_TUNE ? tuneCur : menu.cursor;
@@ -1289,6 +1598,8 @@ static void uiChange(int d) {
     if ((c == 1 && menu.fx1 == 4) || (c == 2 && menu.fx2 == 4)) tuneSend();  // TUNE picked: push its settings
     if ((c == 1 && menu.fx1 == 10) || (c == 2 && menu.fx2 == 10)) harmSend(); // HARMONY: maps in the current key
     if (c < 3) ampFollow();                                              // AMP: its settings + pedal-mode pots
+  } else if (uiPage == PAGE_TUNE && c == 5) {
+    masterSet(masterPct + 2 * d);                        // MASTER: the pedal board's output (saved)
   } else if (uiPage == PAGE_TUNE && c == 4) {
     bg::setTheme(bg::theme + d);                         // THEME: menu colours (saved), MATCH SCENE first
   } else if (uiPage == PAGE_TUNE && c == 3) {
@@ -1312,6 +1623,7 @@ static void cursorMove(int d) {
   if (uiPage == PAGE_SYS) return;
   if (uiPage == PAGE_MAIN) { mainMove(d); uiShow(); return; }
   if (uiPage == PAGE_PEDAL) { pedalKnob(d); uiShow(); return; }
+  if (uiPage == PAGE_PKNOB) { pknobMove(d); uiShow(); return; }
   if (uiPage == PAGE_PRESET) { presetKnob(d); uiShow(); return; }
   if (uiPage == PAGE_EDIT) {
     int n = fxParams(editFx()).n;
@@ -1320,12 +1632,13 @@ static void cursorMove(int d) {
     uiShow();
     return;
   }
-  if (uiPage == PAGE_TUNE) tuneCur = wrapv(tuneCur + d, 5);
+  if (uiPage == PAGE_TUNE) tuneCur = wrapv(tuneCur + d, 6);
   else menu.cursor = wrapv(menu.cursor + d, 4);                         // FX: MODE, FX 1, FX 2, STRIP
   uiShow();
 }
 
 static void editOpen() {                          // T5 / enter on the pedal board: the effect's settings
+  if ((uiPage == PAGE_PEDAL || uiPage == PAGE_PKNOB) && pedalIdx < PD_N) { pknobOpen(); return; }   // a sim: its knobs
   editStrip = uiPage == PAGE_FX && menu.cursor == 3;
   navGo(PAGE_EDIT);
   int n = fxParams(editFx()).n;
@@ -1333,6 +1646,10 @@ static void editOpen() {                          // T5 / enter on the pedal boa
 }
 
 static void bypass(int which) {
+  if (pedalPots() == 4) {                    // a sim on the board: B1 is its footswitch
+    if (which == 1) pdBypass(); else gateToggle();   // B2: the input gate
+    return;
+  }
   if (menu.mode == 3) {                      // CHAIN: B1 bypasses the whole chain (SINGLE + CLEAN), STRIP stays
     if (which != 1) { displayStatus("CHAIN: B1 BYPASSES", th::STEEL_L); return; }
     menu.byp1 = !menu.byp1;
@@ -1422,7 +1739,7 @@ void menuDraw() { navGo(PAGE_FX); uiShow(); }
 
 // Which pedal the idle screen shows (or -1 = vocal: the face sings): FX1, else FX2 when it is in the chain
 int idlePedal() {
-  if (uiMode == MODE_PEDAL && menu.mode == 0) return menu.fx1;     // the pedal board's pedal
+  if (uiMode == MODE_PEDAL) return BOARD_FX + pedalIdx;           // the pedal board's pedal
   if (menu.mode == 3) {                      // CHAIN: its first pedal-type effect
     for (int i = 0; i < menu.chainN; i++) if (menu.chain[i] < N_FX && FX_PEDAL[menu.chain[i]]) return menu.chain[i];
     return -1;

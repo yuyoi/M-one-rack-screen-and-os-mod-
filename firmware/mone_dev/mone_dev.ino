@@ -636,6 +636,7 @@ void setup() {
   Serial.println("M-One dev tool ready: j=id o=regs D=flash dump P=pmem L=load G=go F=fx page i=system page K=learn buttons W=wifi");
   displayBegin();
   bg::load();                                     // scene + menu theme (NVS) before the first frame
+  pdLoad();                                       // pedal board: knob settings, MASTER, the last pedal
   if (th::begin()) th::bootSplash(1500);          // spinning low-poly logo + flame progress bar
   controlsBegin();
   wifiStart();
