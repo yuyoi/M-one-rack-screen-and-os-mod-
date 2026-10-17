@@ -12,8 +12,8 @@ Budget 2112/frame, kernel + CLEAN ~85, AMP + kernel ~1770.
 
 | Engine | id* | Circuit model | Pedals | instr/frame | hw est. | P words |
 |---|---|---|---|---|---|---|
-| DIRT | 17 | DC blocker, pre-EQ biquad (+ dry), 4x polyphase up, 1-3 stages (coupling HPF, gain + pre-clip LPF, bias - dynamic bias, 257-point circuit-solved curve), 48-tap down, clean sum (delayed to line up), 1-3 tone biquads, level | TS808, SD-1, Klon, RAT, DS-1, Big Muff, Metal Muff, Metal Zone, Fuzz Face, Funeral, Iron Man; amp RADIO | 401-439 (1 stage), 557-595 (2) | 520-570 / 720-770 | 222 |
-| MOD | 18 | BBD line: drive, split biquad (BBD in-filter / Leslie crossover), ring A (512) + ring B (64), 2 voices: ramped LFO (rotor inertia), triangle or sine, interpolated read, AM tap, regen; post biquad | CE-2, Dimension D, Flanger (BF-2), Tremolo (TR-2), Leslie 122 | 168-342 | 220-445 | 249 |
+| DIRT | 17 | DC blocker, pre-EQ biquad (+ dry), 4x polyphase up, 1-3 stages (coupling HPF, gain + pre-clip LPF, bias - dynamic bias, 257-point circuit-solved curve), 48-tap down, clean sum (delayed to line up), 1-3 tone biquads, level | TS808, SD-1, Klon, RAT, DS-1, Big Muff, Metal Muff, Metal Zone, Fuzz Face, Funeral, Iron Man; amp RADIO | 401-439 (1 stage), 557-595 (2) | 520-570 / 720-770 | 239 |
+| MOD | 18 | BBD line: drive, split biquad (BBD in-filter / Leslie crossover), ring A (512) + ring B (64), 2 voices: ramped LFO (rotor inertia), triangle or sine, interpolated read, AM tap, regen; post biquad | CE-2, Dimension D, Flanger (BF-2), Tremolo (TR-2), Leslie 122 | 168-342 | 220-445 | 252 |
 | PHASER | 19 | 4 JFET all-passes, break frequency linear in the LFO (JFET triode region), cubic fit, script / block feedback | Phase 90 | 99 | ~130 | 58 |
 | WAH | 20 | Cry Baby tank as a Chamberlin SVF band-pass + LP leak, treadle smoothed on the DSP (15 ms), f / Q polynomials | Crybaby, Reso Wah | 77 | ~100 | 66 |
 | SPRING | 21 | two springs: dwell drive, ring (33 / 41 ms), band-edge LP, 8 stretched all-passes (dispersion chirp) in each loop, tone LP | Spring (6G15-style); Space Echo's tank | 342 | ~445 | 142 |
@@ -79,8 +79,8 @@ This plugs into `menu.h` PEDALS[] / PedalDef: a board knob = a `PdKnob` + its ta
 ## Memory (agreed with the FX lab 2026-10-17; VOCAL_ARCH.md is the source of truth)
 | What | P | X | Y / SRAM |
 |---|---|---|---|
-| DIRT | $0E00-$0EDD | $0900 params, $0940 state, $0980 up ring (16), $0990 dry ring (16), $09C0 down ring (64), $0A00-$0D02 3 curves | Y $0D00-$0D5F FIR (copied from AMP's SRAM table) |
-| MOD | $0EE0-$0FD8 | $0D10 params, $0D40 state, $0D80 ring B (64), $0E00-$0FFF ring A (512) | - |
+| DIRT | $0E00-$0EEE | $0900 params, $0940 state, $0980 up ring (16), $0990 dry ring (16), $09C0 down ring (64), $0A00-$0D02 3 curves | Y $0D00-$0D5F FIR (copied from AMP's SRAM table) |
+| MOD | $0EEF-$0FEA | $0D10 params, $0D40 state, $0D80 ring B (64), $0E00-$0FFF ring A (512) | - |
 | PHASER / WAH | $0960-$09DB (of $0960-$09FF) | $0DC0-$0DFF | - |
 | SPRING | none left (needs ~142 words) | (placeholder $0888) | would share REVERB's ring $038000 |
 

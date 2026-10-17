@@ -6,7 +6,8 @@ model/dirt_model.py; test: model/sim_dirt.py (bit-exact).
 fx_dirt: sample in X1 -> out in X1, like every effect. First call and every pedal pick (the pick writes INITF = 0,
 X:$097F): clears its state and rings, copies the 4x FIR coefficients
 from AMP's SRAM table (loaded at boot) into Y:$0D00. Params and curves come from the ESP (a pedal = writes); with
-NST = 0 (nothing written yet) it passes the input through.
+NST <= 0 (nothing written yet) it passes the input through; NST and NTONE are clamped to 1..3, so junk in X can't
+hang it.
 Uses R0-R6 / M1-M3, M6 and puts the M registers back to linear before it returns.
 
 Memory (agreed with the FX lab 2026-10-17, VOCAL_ARCH.md): P $0E00-$0FFF, X $0900-$0D03, Y $0D00-$0D5F.
@@ -68,8 +69,8 @@ a.label('fx_dirt')
 h.ldl(INITF, 'A'); h.cmpi(MAGIC, 'A'); h.j('EQ', 'go')
 a.jsr('init')
 a.label('go')
-h.ldl(P_NST, 'A'); h.tst('A'); h.j('NE', 'run')
-h.rts()                                        # nothing written yet: X1 passes through
+h.ldl(P_NST, 'A'); h.tst('A'); h.j('GT', 'run')
+h.rts()                                        # nothing written yet (or junk <= 0): X1 passes through
 a.label('run')
 # ---- input DC blocker: y = x - xprev + R*yprev (x in X1); dcy = sat(y) = the dry signal
 h.mv('X1', 'A')
@@ -98,7 +99,7 @@ h.mv('A', 'X0')
 h.movec('M1', 15); h.movec('M2', 15); h.movec('M6', 63)
 h.ldl(RUP, 'R1')
 h.ldl(RDN, 'R6')
-h.ldl(P_NST, 'N0')
+a.jsr('n0_13')                                 # N0 = NST clamped to 1..3 (junk in X can't hang the DSP)
 h.li('R4', FIRY)
 h.stxi('X0', '(R1)')
 a.do(4, 'os_end')
@@ -165,8 +166,8 @@ h.mv('A', 'X0'); h.ldl(P_PG, 'Y0'); h.mpy('X0', 'Y0', 'A')
 h.ldl(DRYD, 'X1'); h.ldl(P_BL, 'Y0'); h.mac('X1', 'Y0', 'A')
 h.mv('A', 'X0')
 h.li('R5', P_TONE); h.li('R0', S_TONE)
-h.ldl(P_NT, 'N0')
-h.nop()
+h.li('R2', P_NT)
+a.jsr('n0_13r')                                # N0 = NTONE clamped to 1..3
 do_reg('N0', 't_end')
 a.jsr('bq')
 h.nop()                                        # a JSR can't end a DO loop
@@ -196,6 +197,21 @@ h.asl1('A')
 h.stxi('A', '(R0)+')                                                        # y1 slot = sat(y)
 h.stxi('X1', '(R0)+')                                                       # y2 slot = y1s
 h.mv('A', 'X0')
+h.rts()
+
+# ======================================================================== n0_13: N0 = X:(param) clamped to 1..3
+a.label('n0_13')
+h.li('R2', P_NST)
+a.label('n0_13r')
+h.nop()
+h.ldxi('(R2)', 'A')
+h.li('B', 1); h.cmp('B', 'A'); h.j('GE', 'c_lo')               # a < 1 -> 1
+h.tfr('B', 'A')
+a.label('c_lo')
+h.li('B', 3); h.cmp('B', 'A'); h.j('LE', 'c_hi')               # a > 3 -> 3
+h.tfr('B', 'A')
+a.label('c_hi')
+h.mv('A1', 'N0')
 h.rts()
 
 # ======================================================================== init (first call)

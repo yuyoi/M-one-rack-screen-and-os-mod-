@@ -1,4 +1,4 @@
-"""MOD: the modulated-delay pedal engine, effect id 18 (PEDAL board). Writes mod.hex (P:$0EE0). CE-2, Dimension D,
+"""MOD: the modulated-delay pedal engine, effect id 18 (PEDAL board). Writes mod.hex (P: right after DIRT, ~$0EE8). CE-2, Dimension D,
 BF-2 flanger, TR-2 tremolo and the Leslie 122 are param sets for it. Reference: model/mod_ref.py (same steps);
 voicings: model/mod_model.py; test: model/sim_mod.py (bit-exact). It calls DIRT's biquad routine (dirt.py, 'bq').
 
@@ -23,7 +23,7 @@ with contextlib.redirect_stdout(io.StringIO()):
     import dirt  # noqa: E402  (assembles it: we need its 'bq' entry)
 BQ = dirt.a.labels['bq']
 
-BASE, END = 0x0EE0, 0x0FFF
+BASE, END = dirt.end + 1, 0x0FFF                  # right after DIRT (both in the P block $0E00-$0FFF)
 PM, SM = MR.PM, MR.SM
 INITF = SM + 31
 MAGIC = 0x3D0D18
@@ -121,7 +121,7 @@ h.xr('X1', MR.V_BASE, R=5); h.add('X1', 'A')
 h.mv('A', 'X0')                                                     # d (samples / 1024)
 h.mv('X0', 'B'); h.lsr(13, 'B'); h.neg('B'); h.mv('B1', 'N2')       # n = -int
 h.mv('X0', 'A'); h.andi(0x001FFF, 'A'); h.lsl(10, 'A'); h.mv('A1', 'X1')   # frac
-h.xr('X0', MR.V_MV, R=5)
+h.xr('A', MR.V_MV, R=5); h.andi(0x0001FF, 'A'); h.mv('A1', 'X0')  # (masked: a junk word can't pick a strange M mode)
 a.op('Movec_S1D2', W=1, e=R6['X0'], D=C5['M2'])                     # m2 = ring size - 1
 h.xr('X0', MR.V_WPP, R=5); h.mv('X0', 'R3')
 h.nop()
