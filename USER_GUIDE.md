@@ -166,6 +166,9 @@ right column. Press each once; turn the encoder to skip a dead one. The map is s
   The fourth row, SCENE, picks the background behind the MODE ring (saved across reboots): NIGHT, DUNGEON PRP,
   DUNGEON BLU, THRONE HALL, CRYSTALS, CASTLE DUSK, CASTLE BLUE, OUTRUN, VAPORWAVE, CYBER CITY, MATRIX, TRON,
   NEON PINK, INFERNO. The floor ring takes the scene's colours; the stars twinkle on the night scenes only.
+  The fifth row, THEME, sets the menu colours (saved): MATCH SCENE (each scene brings its own) or a fixed one of
+  FORGE (the original orange), INFERNO, AMETHYST, ROYAL, FROST, CRYSTAL, ROSE, OUTRUN, VAPOR, CYBER, MATRIX, TRON,
+  NEON, BLACK WHITE. Pedal, preset-type and status colours stay as they are.
 - EDIT page (T5): the settings of FX 1 (or of FX 2 when FX 1 has none) for AMP, RADIO, FORMANT, OCTAVE, HARMONY, DOUBLER,
   REVERB, DELAY, SHIMMER, SWELL and GRAIN; on the FX page's STRIP row, STRIP's own (GATE, DE-ESS, COMP, MAKEUP, DRIVE, EQ
   PRESENCE / AIR / LOW + EQ GAIN). The first row of FORMANT (VOICE), REVERB and DELAY (TYPE) is a preset that sets the rows under it;

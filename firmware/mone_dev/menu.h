@@ -128,7 +128,7 @@ static void drawTest(uint32_t now) {
   for (int k = 0; k < 3; k++) {              // pot bars
     int x = 4 + k * 39, pct = constrain(sysMv[k] / 31, 0, 100);
     th::cv.drawRect(x, 93, 36, 8, th::p15(th::STEEL));
-    static const uint32_t st[3] = {th::YELLOW, th::ORANGE, th::RED};
+    const uint32_t st[3] = {th::YELLOW, th::ORANGE, th::RED};
     if (pct) th::grad(x + 1, 94, x + 1 + 34 * pct / 100, 100, st, 3, false);
   }
   int n = 0;
@@ -236,13 +236,14 @@ static void drawTune(uint32_t now) {
   backdrop();
   th::header("SETTINGS", now);
   char v[16];
-  th::row(28, "TUNE KEY", KEY_NAMES[menu.key], tuneCur == 0, false, now, th::slide(now, pageT0, 0));
-  th::row(46, "SCALE", SCALE_NAMES[menu.scale], tuneCur == 1, false, now, th::slide(now, pageT0, 1));
+  th::row(24, "TUNE KEY", KEY_NAMES[menu.key], tuneCur == 0, false, now, th::slide(now, pageT0, 0));
+  th::row(41, "SCALE", SCALE_NAMES[menu.scale], tuneCur == 1, false, now, th::slide(now, pageT0, 1));
   snprintf(v, sizeof v, menu.speed >= 9 ? "%d ROBOT" : (menu.speed <= 2 ? "%d NATURAL" : "%d"), menu.speed);
-  th::row(64, "SPEED", v, tuneCur == 2, false, now, th::slide(now, pageT0, 2));
-  th::row(82, "SCENE", bg::SCENES[bg::sel].name, tuneCur == 3, false, now, th::slide(now, pageT0, 3));
+  th::row(58, "SPEED", v, tuneCur == 2, false, now, th::slide(now, pageT0, 2));
+  th::row(75, "SCENE", bg::SCENES[bg::sel].name, tuneCur == 3, false, now, th::slide(now, pageT0, 3));
+  th::row(92, "THEME", bg::themeName(), tuneCur == 4, false, now, th::slide(now, pageT0, 4));
   bool on = menu.fx1 == 4 || (menu.mode != 0 && menu.fx2 == 4);
-  statusOr(tuneCur == 3 ? "THE MODE RING'S LOOK" : on ? "KNOB:EDIT T6/B6:MOVE" : "TUNE IS NOT PLAYING");
+  statusOr(tuneCur == 4 ? "MENU COLOURS" : tuneCur == 3 ? "THE MODE RING'S LOOK" : on ? "KNOB:EDIT T6/B6:MOVE" : "TUNE IS NOT PLAYING");
 }
 
 extern bool dspAwake;                        // face.h: the power switch says the DSP runs
@@ -255,7 +256,7 @@ static void drawSys(uint32_t now) {
   for (int k = 0; k < 3; k++) {              // pot bars
     int x = 34 + k * 28, pct = constrain(sysMv[k] / 31, 0, 100);
     th::cv.drawRect(x, 27, 25, 7, th::p15(th::STEEL));
-    static const uint32_t st[3] = {th::YELLOW, th::ORANGE, th::RED};
+    const uint32_t st[3] = {th::YELLOW, th::ORANGE, th::RED};
     if (pct) th::grad(x + 1, 28, x + 1 + 23 * pct / 100, 33, st, 3, false);
   }
   int y = 39;
@@ -1288,6 +1289,8 @@ static void uiChange(int d) {
     if ((c == 1 && menu.fx1 == 4) || (c == 2 && menu.fx2 == 4)) tuneSend();  // TUNE picked: push its settings
     if ((c == 1 && menu.fx1 == 10) || (c == 2 && menu.fx2 == 10)) harmSend(); // HARMONY: maps in the current key
     if (c < 3) ampFollow();                                              // AMP: its settings + pedal-mode pots
+  } else if (uiPage == PAGE_TUNE && c == 4) {
+    bg::setTheme(bg::theme + d);                         // THEME: menu colours (saved), MATCH SCENE first
   } else if (uiPage == PAGE_TUNE && c == 3) {
     r3::build();
     bg::set(bg::sel + d);                                // SCENE: the ring's background (saved)
@@ -1317,7 +1320,7 @@ static void cursorMove(int d) {
     uiShow();
     return;
   }
-  if (uiPage == PAGE_TUNE) tuneCur = wrapv(tuneCur + d, 4);
+  if (uiPage == PAGE_TUNE) tuneCur = wrapv(tuneCur + d, 5);
   else menu.cursor = wrapv(menu.cursor + d, 4);                         // FX: MODE, FX 1, FX 2, STRIP
   uiShow();
 }

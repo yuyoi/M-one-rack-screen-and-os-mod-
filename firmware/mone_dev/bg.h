@@ -397,15 +397,33 @@ static void draw(LovyanGFX &g, int id) {
 // The chosen scene (NVS "ui"/"bg"); dirty = the cached sky must be redrawn
 static int sel = 0;
 static bool dirty = true;
+// The menu theme (NVS "ui"/"theme"): -1 = MATCH SCENE (each scene brings its own), else a fixed th::THEMES entry
+static const uint8_t SCENE_THEME[N_SCENES] = {0, 2, 4, 3, 5, 6, 4, 7, 8, 9, 10, 11, 12, 1};
+static int theme = -1;
+static void applyTheme() { th::applyTheme(theme < 0 ? SCENE_THEME[sel] : theme); }
+static const char *themeName() { return theme < 0 ? "MATCH SCENE" : th::THEMES[theme].name; }
 static void load() {
   Preferences pr;
   pr.begin("ui", true);
   sel = constrain(pr.getInt("bg", 0), 0, N_SCENES - 1);
+  theme = constrain(pr.getInt("theme", -1), -1, th::N_THEMES - 1);
   pr.end();
+  applyTheme();
   dirty = true;
+}
+static void setTheme(int id) {
+  int n = th::N_THEMES + 1;
+  theme = ((id + 1) % n + n) % n - 1;
+  applyTheme();
+  dirty = true;
+  Preferences pr;
+  pr.begin("ui", false);
+  pr.putInt("theme", theme);
+  pr.end();
 }
 static void set(int id) {
   sel = ((id % N_SCENES) + N_SCENES) % N_SCENES;
+  applyTheme();
   dirty = true;
   Preferences pr;
   pr.begin("ui", false);

@@ -7,8 +7,31 @@
 
 namespace th {
 
-const uint32_t BLACK = 0x08080C, STEEL_D = 0x242228, STEEL = 0x484650, STEEL_L = 0x8C8896, ORANGE = 0xFF7000,
-               YELLOW = 0xFFCC00, RED = 0xE82010, EMBER = 0x6E1A00, WHITE = 0xF0ECE0, ASH = 0x1C0C04;
+// The menu colours: set from THEMES at run time (SETTINGS > THEME); these are FORGE, the original look
+static uint32_t BLACK = 0x08080C, STEEL_D = 0x242228, STEEL = 0x484650, STEEL_L = 0x8C8896, ORANGE = 0xFF7000,
+                YELLOW = 0xFFCC00, RED = 0xE82010, EMBER = 0x6E1A00, WHITE = 0xF0ECE0, ASH = 0x1C0C04, SMOKE = 0x3C1200;
+struct Theme { const char *name; uint32_t c[11]; };   // BLACK STEEL_D STEEL STEEL_L ORANGE YELLOW RED EMBER WHITE ASH SMOKE
+static const Theme THEMES[] = {
+  {"FORGE",    {0x08080C, 0x242228, 0x484650, 0x8C8896, 0xFF7000, 0xFFCC00, 0xE82010, 0x6E1A00, 0xF0ECE0, 0x1C0C04, 0x3C1200}},
+  {"INFERNO",  {0x0A0606, 0x2A2022, 0x504246, 0x9A8A8E, 0xFF3C14, 0xFFDC28, 0xB40A0A, 0x6E0A06, 0xF8EAE0, 0x1E0402, 0x440804}},
+  {"AMETHYST", {0x0A0810, 0x26202E, 0x4A4058, 0x9286A8, 0xB44CFF, 0xF0A8FF, 0x7A1EC8, 0x3C0E5A, 0xF2E8FA, 0x14061E, 0x2E0C44}},
+  {"ROYAL",    {0x0A0810, 0x262230, 0x4A4462, 0x948CB0, 0x9A7CFF, 0xFFD25A, 0x5A3CC8, 0x2C1C5A, 0xF0ECF8, 0x120A22, 0x241444}},
+  {"FROST",    {0x06080E, 0x1E242E, 0x3C4858, 0x8496AC, 0x3C96FF, 0xB4E0FF, 0x1450C8, 0x0C2850, 0xE8F2FC, 0x040A16, 0x0C2040}},
+  {"CRYSTAL",  {0x060A0E, 0x1C262E, 0x3A4A58, 0x82A0B0, 0x46D2FF, 0xD2F8FF, 0x7050FF, 0x1E2A64, 0xE8FAFF, 0x040C14, 0x0A2A3C}},
+  {"ROSE",     {0x0C0808, 0x2C2226, 0x54444C, 0xA08C96, 0xFF6E96, 0xFFC8A0, 0xC81E5A, 0x5A1438, 0xFAEEEE, 0x1C0610, 0x3C0C24}},
+  {"OUTRUN",   {0x0A060E, 0x28202E, 0x4C4058, 0x9888A8, 0xFF28B4, 0xFFD23C, 0x8C14C8, 0x5A0A50, 0xFAEAF6, 0x16041A, 0x3C0A3C}},
+  {"VAPOR",    {0x0C0A10, 0x2A2634, 0x50485E, 0x9C94B0, 0xFF8CD2, 0x78F0F0, 0xA050E6, 0x4A2878, 0xFFF2FA, 0x140C20, 0x32184A}},
+  {"CYBER",    {0x06060E, 0x1E1E2C, 0x3E3E58, 0x8A8AAA, 0xFF2896, 0x50E6FF, 0x8C1E8C, 0x46104A, 0xECF0FF, 0x0C0418, 0x2E0A36}},
+  {"MATRIX",   {0x040806, 0x1C2620, 0x3A4A3E, 0x82A08A, 0x28E650, 0xB4FFB4, 0x0A9632, 0x0A3C14, 0xDCFFDC, 0x020A04, 0x062A0E}},
+  {"TRON",     {0x04060C, 0x1A2230, 0x364658, 0x7E96AE, 0x00D2FF, 0xF0FCFF, 0x0A64C8, 0x0A2850, 0xE6F6FF, 0x020814, 0x041E36}},
+  {"NEON",     {0x0C060E, 0x2A202E, 0x50405A, 0xA08CAA, 0xFF5AE6, 0xC88CFF, 0xA01EC8, 0x50145A, 0xFCEEFC, 0x18041C, 0x3A0C40}},
+  {"BLACK WHITE", {0x080808, 0x222222, 0x464646, 0x8C8C8C, 0xC8C8C8, 0xFFFFFF, 0x6E6E6E, 0x323232, 0xF0F0F0, 0x141414, 0x2A2A2A}}};
+static const int N_THEMES = sizeof THEMES / sizeof THEMES[0];
+static void applyTheme(int i) {
+  const uint32_t *c = THEMES[constrain(i, 0, N_THEMES - 1)].c;
+  BLACK = c[0]; STEEL_D = c[1]; STEEL = c[2]; STEEL_L = c[3]; ORANGE = c[4]; YELLOW = c[5];
+  RED = c[6]; EMBER = c[7]; WHITE = c[8]; ASH = c[9]; SMOKE = c[10];
+}
 // preset type colours: STUDIO, TUNE, HARMONY, LO-FI, MONSTER, AMBIENT
 const uint32_t TYPE_COL[6] = {0xFF7000, 0xFFCC00, 0xE6AA28, 0xAA4614, 0xE82010, 0x963CDC};
 
@@ -65,7 +88,7 @@ void vignette(float amount, int cx = 60, int cy = 64) {
     for (int x = 0; x < 120; x++) {
       float r = sqrtf((float)((x - cx) * (x - cx) + (y - cy) * (y - cy))) / 70.0f;
       float t = (1 - r) * (1 - r) * amount + (BAYER[y & 3][x & 3] / 16.0f - 0.5f) * 0.12f;
-      cv.drawPixel(x, y, r >= 1 ? BLACK : p15(mix(BLACK, 0x3C1200, t)));
+      cv.drawPixel(x, y, r >= 1 ? BLACK : p15(mix(BLACK, SMOKE, t)));
     }
 }
 
@@ -182,7 +205,7 @@ static uint32_t hash32(uint32_t v) { v ^= v >> 16; v *= 0x7FEB352D; v ^= v >> 15
 
 // Molten header band (rows 0-18): the lava waves slowly, flame licks flicker below it. dot >= 0 lights a page dot.
 void header(const char *title, uint32_t ph, int dot = -1, int nDots = 3) {
-  static const uint32_t st[3] = {YELLOW, ORANGE, EMBER};
+  const uint32_t st[3] = {YELLOW, ORANGE, EMBER};
   for (int y = 0; y < 19; y++)
     for (int x = 0; x < 120; x++)
       cv.drawPixel(x, y, gradAt(x, y, y / 18.0f + 0.09f * sinf(x * 0.21f + ph * 0.004f), st, 3));
@@ -219,7 +242,7 @@ void row(int y, const char *key, const char *val, bool sel, bool dim, uint32_t p
     for (int x = x0 + 1; x < x1; x++) {
       float t = (x - x0) / (float)(x1 - x0) - 0.35f * expf(-(float)((x - x0 - sweep) * (x - x0 - sweep)) / 90.0f);
       for (int yy = y + 1; yy < y + 14; yy++) {
-        static const uint32_t st[2] = {ORANGE, EMBER};
+        const uint32_t st[2] = {ORANGE, EMBER};
         cv.drawPixel(x, yy, gradAt(x, yy, t, st, 2));
       }
     }
@@ -341,7 +364,7 @@ void bootSplash(uint32_t ms = 1600) {
     }
     metal(60, 84, "M-ONE", 2, YELLOW, ORANGE, 'm');
     float pr = (now - t0) / (float)ms;                 // flame progress bar
-    static const uint32_t st[3] = {YELLOW, ORANGE, RED};
+    const uint32_t st[3] = {YELLOW, ORANGE, RED};
     cv.drawRect(19, 102, 82, 7, p15(STEEL));
     grad(20, 103, 20 + (int)(80 * pr), 108, st, 3, false);
     present();
