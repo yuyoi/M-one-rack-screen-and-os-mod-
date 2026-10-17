@@ -3,7 +3,8 @@ Klon, RAT, DS-1, Big Muff, Metal Muff, Metal Zone, Fuzz Face, Funeral, Iron Man,
 and curve tables for this one program. Reference model: model/dirt_ref.py (same steps, same scaling); circuit models:
 model/dirt_model.py; test: model/sim_dirt.py (bit-exact).
 
-fx_dirt: sample in X1 -> out in X1, like every effect. First call: clears its state, copies the 4x FIR coefficients
+fx_dirt: sample in X1 -> out in X1, like every effect. First call and every pedal pick (the pick writes INITF = 0,
+X:$097F): clears its state and rings, copies the 4x FIR coefficients
 from AMP's SRAM table (loaded at boot) into Y:$0D00. Params and curves come from the ESP (a pedal = writes); with
 NST = 0 (nothing written yet) it passes the input through.
 Uses R0-R6 / M1-M3, M6 and puts the M registers back to linear before it returns.

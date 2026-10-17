@@ -2,8 +2,9 @@
 BF-2 flanger, TR-2 tremolo and the Leslie 122 are param sets for it. Reference: model/mod_ref.py (same steps);
 voicings: model/mod_model.py; test: model/sim_mod.py (bit-exact). It calls DIRT's biquad routine (dirt.py, 'bq').
 
-fx_mod: sample in X1 -> out in X1. First call: clears its state and both rings. The ESP writes the params and the
-voice start states when a pedal is picked (with nothing written, TGT = WET = 0: it outputs DRY * x = silence).
+fx_mod: sample in X1 -> out in X1. First call, and every pedal pick (the pick writes INITF = 0): clears its state and
+both rings, so the old pedal's tail never plays; the voice start states the pick writes (INCH, INCL, PH) are kept.
+With nothing written, TGT = WET = 0: it outputs DRY * x = silence.
 Uses R0-R5, M1, M2 and puts them back to linear.
 Memory (agreed with the FX lab 2026-10-17, VOCAL_ARCH.md): P $0EE0-$0FFF, X $0D10-$0D5F (params, state), $0D80-$0DBF (ring B),
 $0E00-$0FFF (ring A).
@@ -164,11 +165,12 @@ h.mv('A', 'X0')
 h.rts()
 
 # ======================================================================== init (first call)
-a.label('init')
-h.clr('A')
+a.label('init')                                    # first call, or a pedal pick (the ESP writes INITF = 0):
+h.clr('A')                                         # state + rings cleared, the voices' INCH / INCL / PH kept
 h.li('R1', SM)
-h.rep(MR.NSM)
+h.rep(MR.S_V)
 h.stxi('A', '(R1)+')
+h.stl('A', S(MR.S_V + 3)); h.stl('A', S(MR.S_V + 7))   # READ of both voices
 h.li('R1', MR.RINGB)
 h.rep(MR.mm.RB)
 h.stxi('A', '(R1)+')

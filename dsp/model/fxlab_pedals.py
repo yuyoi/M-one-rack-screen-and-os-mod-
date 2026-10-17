@@ -3,9 +3,8 @@ pedal knobs. No DSP code here: every knob is a table of those engines' param wor
 delay_model.params, harmony_model.shimmer_params, strip_model.swell_params), and a pedal that needs two engines
 runs them as a CHAIN (X:$20 = 3, X:$0200 = n, X:$0201.. = ids).
 
-Space Echo is the DELAY's TAPE mode (wow, saturation, dark repeats); its heads are approximated by the time
-multiplier of the MODE knob (head 1 / 2 / 3, and 1+3 / 2+3 with the DELAY's tap mode) until the FX lab's DELAY gets
-a real 3-head mode (FX lab: HEADS param, coming). Its spring is a small bright REVERB after the DELAY: SPRING
+Space Echo is the DELAY's HEADS mode (FX lab, 2026-10-17: X:$0299 = head mask, heads at T / 2T / 3T) with wow and
+tape saturation. Its spring is a small bright REVERB after the DELAY: SPRING
 (effect 21) is built but has no P RAM (sim only), so the SPRING pedal is the same REVERB stopgap.
 """
 import numpy as np
@@ -124,16 +123,20 @@ def digital(k):
                              wet=lin(k['LEVEL'], 0, 0.7), tone=0.95)}
 
 
-SE_HEADS = [(1, 0), (2, 0), (3, 0), (3, 1), (2, 1)]            # (head, tap mode) for MODE 1-5 (~ RE-201 selector)
+SE_HEADS = [1, 2, 4, 6, 3, 5, 7]       # MODE 1-7: H1, H2, H3, H2+H3, H1+H2, H1+H3, H1+H2+H3 (DELAY HEADS mask, X:$0299)
 
 
-@pedal('SPACE ECHO', [DELAY, REVERB], [('MODE', 'M5', 0.0), ('RATE', 'B', 0.5), ('INTENSITY', 'B', 0.45),
+@pedal('SPACE ECHO', [DELAY, REVERB], [('MODE', 'M7', 0.0), ('RATE', 'B', 0.5), ('INTENSITY', 'B', 0.45),
                                        ('ECHO', 'B', 0.5), ('REVERB', 'B', 0.3), ('TONE', 'B', 0.4)], 0x2F6B3A)
 def spaceecho(k):
-    # RE-201: RATE = tape speed (head 1 at ~60-190 ms), INTENSITY = feedback (self-oscillates near the top), ECHO =
-    # level, REVERB = the spring's level, TONE = treble of the repeats; wow + tape saturation always on
-    head, taps = SE_HEADS[min(int(k['MODE'] * 4 + 0.5), 4)]
+    # RE-201 on the DELAY's HEADS mode (heads at T, 2T, 3T, their sum feeds the output and the feedback):
+    # MODE = the selector's head combinations (its reverb on/off = the REVERB knob, which is the REVERB VOLUME),
+    # RATE = tape speed (head 1 ~60-190 ms, head 3 <= 570 ms), INTENSITY = feedback, scaled down for more heads so
+    # the top of the knob runs into self-oscillation for every mode, ECHO = level, TONE = treble of the repeats
+    # (RE-201 BASS + TREBLE folded into one knob); wow + tape saturation always on.
+    heads = SE_HEADS[min(int(round(k['MODE'] * 6)), 6)]
+    n = bin(heads).count('1')
     t1 = lin(1 - k['RATE'], 60, 190)
-    spring = rv.params(size=0.3, decay=0.55, damp=lin(k['TONE'], 0.4, 0.05), pre_ms=2, wet=lin(k['REVERB'], 0, 0.5))
-    return {DELAY: dl.params(min(t1 * head, 720), fb=lin(k['INTENSITY'], 0, 0.95), wet=lin(k['ECHO'], 0, 0.7),
-                             tone=lin(k['TONE'], 0.2, 0.6), wow=6, sat=1, taps=taps, wow_hz=0.9), REVERB: spring}
+    tank = rv.params(size=0.3, decay=0.55, damp=lin(k['TONE'], 0.4, 0.05), pre_ms=2, wet=lin(k['REVERB'], 0, 0.5))
+    return {DELAY: dl.params(t1, fb=lin(k['INTENSITY'], 0, 1.0) / n ** 0.8, wet=lin(k['ECHO'], 0, 0.7),
+                             tone=lin(k['TONE'], 0.2, 0.6), wow=3, sat=1, wow_hz=0.9, heads=heads), REVERB: tank}

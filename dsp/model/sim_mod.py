@@ -46,6 +46,7 @@ def pick_writes(name, kn=None):
         for k in range(3):
             o = R.S_V + 4 * v + k
             out[R.SM + o] = si[o]
+    out[R.SM + 31] = 0                                       # INITF: clear-on-pick
     return out
 
 
@@ -58,7 +59,7 @@ def run_one(name, secs, kn=None, kn2=None):
     n0 = len(s.out)
     t = time.time()
     m = R.Mod(name, kn)
-    m.wp = [R.RINGA + 1, R.RINGB + 1]                      # the init frame (zeros) already advanced the pointers
+    # the pick wrote INITF = 0: the first stream frame re-inits (rings cleared, pointers back at the ring bases)
     half = len(xi) // 2 if kn2 else len(xi)
     _, worst = s.run_audio(list(xi[:half]), list(xi[:half]), max_instr_per_frame=500000)
     ref = list(m.run(xi[:half] / Q))
@@ -86,6 +87,20 @@ if __name__ == '__main__':
     secs = float(sys.argv[1]) if len(sys.argv) > 1 else 0.05
     names = sys.argv[2:] or list(mm.PEDALS)
     ok = [run_one(nm, secs) for nm in names]
+    print('pick FLANGER over a playing CE-2 (tail must be gone):', end=' ')
+    s = build_sim()
+    s.X.update(pick_writes('CE-2'))
+    x = am.di_riff()[:int(secs * mm.FS)] * 2.0
+    xi = np.round(x * (Q - 1)).astype(int)
+    s.run_audio(list(xi), list(xi), max_instr_per_frame=500000)
+    s.X.update(pick_writes('FLANGER'))
+    n0 = len(s.out)
+    _, worst = s.run_audio(list(xi), list(xi), max_instr_per_frame=500000)
+    y = np.array(s.out[n0 + 1::2], float) / Q
+    r = R.Mod('FLANGER').run(xi / Q)
+    bad = np.flatnonzero(np.abs(y - r[:len(y)]) * Q > 0.5)
+    print('worst %d instr/frame (the re-init frame) | %s' % (worst, 'BIT-EXACT' if not len(bad) else 'MISS %d' % len(bad)))
+    ok.append((not len(bad), worst))
     if 'LESLIE' in names:
         print('LESLIE slow -> fast half way:', end=' ')
         ok.append(run_one('LESLIE', secs, {'SPEED': 0.0}, {'SPEED': 1.0}))

@@ -64,6 +64,7 @@ def load_pedal(s, name, kn=None):
     s.X.update({R.PAR + i: v for i, v in enumerate(R.ints(w))})
     for addr, t in tabs.items():
         s.X.update({addr + i: v for i, v in enumerate(R.tab_ints(t))})
+    s.X[R.ST + 63] = 0                                       # INITF: clear-on-pick (re-init on the next frame)
 
 
 def run_one(name, secs, kn=None):

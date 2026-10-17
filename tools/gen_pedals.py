@@ -48,9 +48,14 @@ def _mod_words(n, kn):
     return {MR.PM + i: v for i, v in enumerate(MR.param_ints(MR.build(n, kn)[0]))}
 
 
+DIRT_INITF, MOD_INITF = R.ST + 63, MR.SM + 31       # a pick writes 0: the engine re-inits (clears its tail)
+
+
 def _mod_extra(n):
     si = MR.state_ints(MR.build(n)[1])
-    return {MR.SM + MR.S_V + 4 * v + k: si[MR.S_V + 4 * v + k] for v in range(2) for k in range(3)}
+    out = {MR.SM + MR.S_V + 4 * v + k: si[MR.S_V + 4 * v + k] for v in range(2) for k in range(3)}
+    out[MOD_INITF] = 0
+    return out
 
 
 def _filt_words(n, kn):
@@ -67,7 +72,7 @@ def _filt_extra(n):
 
 
 ENGINES = [
-    Engine(dm.PEDALS, dm.knobs_default, _dirt_words, lambda n: [FX_ID['dirt']], curves=_dirt_curves),
+    Engine(dm.PEDALS, dm.knobs_default, _dirt_words, lambda n: [FX_ID['dirt']], lambda n: {DIRT_INITF: 0}, _dirt_curves),
     Engine(mm.PEDALS, mm.knobs_default, _mod_words, lambda n: [FX_ID['mod']], _mod_extra),
     Engine(fm.PEDALS, fm.knobs_default, _filt_words, lambda n: [FX_ID[fm.PEDALS[n]['fx']]], _filt_extra),
     Engine(XP.PEDALS, XP.knobs_default, XP.words, lambda n: XP.PEDALS[n]['chain']),      # the FX lab's engines

@@ -13,7 +13,7 @@ Budget 2112/frame, kernel + CLEAN ~85, AMP + kernel ~1770.
 | Engine | id* | Circuit model | Pedals | instr/frame | hw est. | P words |
 |---|---|---|---|---|---|---|
 | DIRT | 17 | DC blocker, pre-EQ biquad (+ dry), 4x polyphase up, 1-3 stages (coupling HPF, gain + pre-clip LPF, bias - dynamic bias, 257-point circuit-solved curve), 48-tap down, clean sum (delayed to line up), 1-3 tone biquads, level | TS808, SD-1, Klon, RAT, DS-1, Big Muff, Metal Muff, Metal Zone, Fuzz Face, Funeral, Iron Man; amp RADIO | 401-439 (1 stage), 557-595 (2) | 520-570 / 720-770 | 222 |
-| MOD | 18 | BBD line: drive, split biquad (BBD in-filter / Leslie crossover), ring A (512) + ring B (64), 2 voices: ramped LFO (rotor inertia), triangle or sine, interpolated read, AM tap, regen; post biquad | CE-2, Dimension D, Flanger (BF-2), Tremolo (TR-2), Leslie 122 | 168-342 | 220-445 | 245 |
+| MOD | 18 | BBD line: drive, split biquad (BBD in-filter / Leslie crossover), ring A (512) + ring B (64), 2 voices: ramped LFO (rotor inertia), triangle or sine, interpolated read, AM tap, regen; post biquad | CE-2, Dimension D, Flanger (BF-2), Tremolo (TR-2), Leslie 122 | 168-342 | 220-445 | 249 |
 | PHASER | 19 | 4 JFET all-passes, break frequency linear in the LFO (JFET triode region), cubic fit, script / block feedback | Phase 90 | 99 | ~130 | 58 |
 | WAH | 20 | Cry Baby tank as a Chamberlin SVF band-pass + LP leak, treadle smoothed on the DSP (15 ms), f / Q polynomials | Crybaby, Reso Wah | 77 | ~100 | 66 |
 | SPRING | 21 | two springs: dwell drive, ring (33 / 41 ms), band-edge LP, 8 stretched all-passes (dispersion chirp) in each loop, tone LP | Spring (6G15-style); Space Echo's tank | 342 | ~445 | 142 |
@@ -49,7 +49,7 @@ body is 39 instructions; ~25 is reachable with parallel moves) or RIG uses a lig
 | RESO WAH | WAH, high Q | PEDAL RES |
 | SPRING | REVERB stopgap (SPRING engine: no P) | DWELL TONE MIX |
 | SLAPBACK / DIGITAL DLY | DELAY | TIME LEVEL / LEVEL FEEDBACK TIME |
-| SPACE ECHO | DELAY (tape) -> REVERB | MODE(1-5) RATE INTENSITY ECHO REVERB TONE (RE-201 BASS + TREBLE folded into TONE; heads ~ by MODE until the FX lab's DELAY HEADS mode lands, then the real 12-position selector) |
+| SPACE ECHO | DELAY HEADS (T / 2T / 3T, wow, tape sat) -> REVERB | MODE(1-7: H1 H2 H3 H2+3 H1+2 H1+3 H1+2+3; the selector's reverb on/off = REVERB at 0) RATE INTENSITY ECHO REVERB(volume) TONE (RE-201 BASS + TREBLE folded into TONE) |
 | HALL/PLATE, CATHEDRAL, CHURCH, STAGE | REVERB | DECAY TONE PRE-DLY LEVEL |
 | CAVE | DELAY -> REVERB | DECAY ECHO TONE LEVEL |
 | AMBIENT | SWELL -> REVERB | DECAY SWELL TONE LEVEL |
@@ -69,6 +69,9 @@ knobs (`label`, default 0..100, steps) and knob tables (`PdTab`: the knob(s), st
   the generator); Metal Zone MIDDLE x MIDFREQ, Metal Muff TOP x BOOST and Flanger MANUAL x DEPTH (and Space Echo
   MODE x RATE) are 2-D tables (21 steps each, a switch 2, mode buttons their count).
 - Checked: init + table rows = a full rebuild at random knob sets, all DIRT pedals.
+- Clear-on-pick: DIRT's and MOD's init writes include INITF = 0 (X:$097F / $0D5F): the engine re-inits on the next
+  frame (state + rings cleared, MOD keeps the voice states the pick wrote), so the old pedal's tail never plays.
+  That one frame costs more: DIRT ~800-960, MOD ~780-950 instructions.
 - Amp voicings are not in this header yet: they need ampTmb (menu.h) to take each voicing's parts and an IR write
   (512 words to Y:$0800 + AMP's SRAM table X:$031C00), so they go to the ESP owner as data (amp_voicings.py).
 This plugs into `menu.h` PEDALS[] / PedalDef: a board knob = a `PdKnob` + its tables (the board draws 1-6 knobs).
@@ -77,7 +80,7 @@ This plugs into `menu.h` PEDALS[] / PedalDef: a board knob = a `PdKnob` + its ta
 | What | P | X | Y / SRAM |
 |---|---|---|---|
 | DIRT | $0E00-$0EDD | $0900 params, $0940 state, $0980 up ring (16), $0990 dry ring (16), $09C0 down ring (64), $0A00-$0D02 3 curves | Y $0D00-$0D5F FIR (copied from AMP's SRAM table) |
-| MOD | $0EE0-$0FD4 | $0D10 params, $0D40 state, $0D80 ring B (64), $0E00-$0FFF ring A (512) | - |
+| MOD | $0EE0-$0FD8 | $0D10 params, $0D40 state, $0D80 ring B (64), $0E00-$0FFF ring A (512) | - |
 | PHASER / WAH | $0960-$09DB (of $0960-$09FF) | $0DC0-$0DFF | - |
 | SPRING | none left (needs ~142 words) | (placeholder $0888) | would share REVERB's ring $038000 |
 
