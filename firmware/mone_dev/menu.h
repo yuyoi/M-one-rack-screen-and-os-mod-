@@ -240,9 +240,9 @@ static void drawTune(uint32_t now) {
   th::row(46, "SCALE", SCALE_NAMES[menu.scale], tuneCur == 1, false, now, th::slide(now, pageT0, 1));
   snprintf(v, sizeof v, menu.speed >= 9 ? "%d ROBOT" : (menu.speed <= 2 ? "%d NATURAL" : "%d"), menu.speed);
   th::row(64, "SPEED", v, tuneCur == 2, false, now, th::slide(now, pageT0, 2));
+  th::row(82, "SCENE", bg::SCENES[bg::sel].name, tuneCur == 3, false, now, th::slide(now, pageT0, 3));
   bool on = menu.fx1 == 4 || (menu.mode != 0 && menu.fx2 == 4);
-  if (!on) th::text(60, 89, "TUNE IS NOT PLAYING", th::p15(th::STEEL_L), 1, 'm');
-  statusOr("KNOB:EDIT T6/B6:MOVE");
+  statusOr(tuneCur == 3 ? "THE MODE RING'S LOOK" : on ? "KNOB:EDIT T6/B6:MOVE" : "TUNE IS NOT PLAYING");
 }
 
 extern bool dspAwake;                        // face.h: the power switch says the DSP runs
@@ -1288,6 +1288,9 @@ static void uiChange(int d) {
     if ((c == 1 && menu.fx1 == 4) || (c == 2 && menu.fx2 == 4)) tuneSend();  // TUNE picked: push its settings
     if ((c == 1 && menu.fx1 == 10) || (c == 2 && menu.fx2 == 10)) harmSend(); // HARMONY: maps in the current key
     if (c < 3) ampFollow();                                              // AMP: its settings + pedal-mode pots
+  } else if (uiPage == PAGE_TUNE && c == 3) {
+    r3::build();
+    bg::set(bg::sel + d);                                // SCENE: the ring's background (saved)
   } else if (uiPage == PAGE_TUNE) {
     if (c == 0) menu.key = wrapv(menu.key + d, 12);
     if (c == 1) menu.scale = wrapv(menu.scale + d, 3);
@@ -1314,7 +1317,7 @@ static void cursorMove(int d) {
     uiShow();
     return;
   }
-  if (uiPage == PAGE_TUNE) tuneCur = wrapv(tuneCur + d, 3);
+  if (uiPage == PAGE_TUNE) tuneCur = wrapv(tuneCur + d, 4);
   else menu.cursor = wrapv(menu.cursor + d, 4);                         // FX: MODE, FX 1, FX 2, STRIP
   uiShow();
 }

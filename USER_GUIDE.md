@@ -163,6 +163,9 @@ right column. Press each once; turn the encoder to skip a dead one. The map is s
   once. With a preset loaded MODE shows CHAIN and the routing line shows the chain; turning FX 1 / FX 2 leaves it.
 - TUNE page: KEY, SCALE (chromatic / major / minor), SPEED 0-10 (0 = natural glide, 10 = hard robot). Notes outside
   the scale snap to the nearest scale note (ties snap down). All 13 values go to the DSP in one short halt.
+  The fourth row, SCENE, picks the background behind the MODE ring (saved across reboots): NIGHT, DUNGEON PRP,
+  DUNGEON BLU, THRONE HALL, CRYSTALS, CASTLE DUSK, CASTLE BLUE, OUTRUN, VAPORWAVE, CYBER CITY, MATRIX, TRON,
+  NEON PINK, INFERNO. The floor ring takes the scene's colours; the stars twinkle on the night scenes only.
 - EDIT page (T5): the settings of FX 1 (or of FX 2 when FX 1 has none) for AMP, RADIO, FORMANT, OCTAVE, HARMONY, DOUBLER,
   REVERB, DELAY, SHIMMER, SWELL and GRAIN; on the FX page's STRIP row, STRIP's own (GATE, DE-ESS, COMP, MAKEUP, DRIVE, EQ
   PRESENCE / AIR / LOW + EQ GAIN). The first row of FORMANT (VOICE), REVERB and DELAY (TYPE) is a preset that sets the rows under it;

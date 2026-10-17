@@ -2,6 +2,7 @@
 // night, Crash-Bandicoot-2 style. Flat shading + specular, 15-bit colour, painter's sort, scanline fill.
 // Approved mockup: tc_mone/research/menu3d.gif (its Python twin, menu3d_mock.py, builds the same meshes).
 #pragma once
+#include "bg.h"                    // the scenes behind the ring
 
 namespace r3 {
 
@@ -276,25 +277,9 @@ static void crown(float x, float y) {             // the mode that is playing
   for (int i = 0; i < 7; i++) th::cv.drawLine(X[i], Y[i], X[(i + 1) % 7], Y[(i + 1) % 7], th::BLACK);
 }
 
-// ---- the night: sky, moon and castle cached in a sprite once; stars twinkle on top every frame
+// ---- the background (bg.h, SETTINGS > SCENE): drawn once into this cached sprite, redrawn when the scene changes
 static LGFX_Sprite sky(&tft);
 static bool skyOk = false;
-static void drawNight(LovyanGFX &g) {
-  static const uint32_t st[3] = {0x06061A, 0x140C30, 0x3A1640};
-  for (int y = 0; y < 108; y++)
-    for (int x = 0; x < 120; x++) g.drawPixel(x, y, th::gradAt(x, y, y / 100.0f, st, 3));
-  static const int MOON_R[3] = {11, 9, 8};
-  static const uint32_t MOON_C[3] = {0x3C141E, 0xC8AA96, 0xECD6BE};
-  for (int k = 0; k < 3; k++) g.fillCircle(98, 30, MOON_R[k], th::p15(MOON_C[k]));
-  uint32_t sil = th::p15(0x0E0816);
-  g.fillRect(0, 99, 120, 9, sil);
-  for (int x = 0; x < 120; x += 6) g.fillRect(x, 96, 3, 3, sil);
-  static const int TW[2][3] = {{2, 12, 88}, {106, 117, 90}};
-  for (int t = 0; t < 2; t++) {
-    g.fillRect(TW[t][0], TW[t][2], TW[t][1] - TW[t][0] + 1, 99 - TW[t][2], sil);
-    for (int x = TW[t][0]; x <= TW[t][1]; x += 4) g.fillRect(x, TW[t][2] - 3, 2, 3, sil);
-  }
-}
 
 static Mesh M_COG, M_PEDAL, M_BIBLE, M_VINYL;
 static bool built = false;
@@ -304,7 +289,7 @@ static void build() {
   M_COG = buildCog(); M_PEDAL = buildPedal(); M_BIBLE = buildBible(); M_VINYL = buildVinyl();
   sky.setColorDepth(16);
   skyOk = sky.createSprite(120, 120) != nullptr;
-  if (skyOk) drawNight(sky);
+  bg::load();
   built = true;
 }
 
@@ -312,19 +297,21 @@ static void build() {
 // arrive 0..1 = the front item's arrival spin, names[5] = item titles.
 static void drawRing(uint32_t now, float pos, int active, float arrive, const char *const *names) {
   build();
-  if (skyOk) sky.pushSprite(&th::cv, 0, 0); else drawNight(th::cv);
-  for (int i = 0; i < 30; i++) {
+  if (skyOk && bg::dirty) { bg::draw(sky, bg::sel); bg::dirty = false; }
+  if (skyOk) sky.pushSprite(&th::cv, 0, 0); else bg::draw(th::cv, bg::sel);
+  const bg::Scene &sc = bg::SCENES[bg::sel];
+  for (int i = 0; i < 30 && sc.stars; i++) {      // twinkling stars on the night scenes
     uint32_t h = th::hash32(i * 2654435761u);
-    th::cv.drawPixel(h % 120, (h >> 8) % 60, th::p15((i + now / 300) % 7 == 0 ? th::WHITE : 0x6E6496));
+    if ((i + now / 300) % 7 == 0) th::cv.drawPixel(h % 120, (h >> 8) % 40, th::p15(th::WHITE));
   }
   float tx[49], ty[49];                           // the glowing floor ring
   for (int i = 0; i <= 48; i++) {
     float a = 2 * PI * i / 48;
     project(toCam({RING * cosf(a), FLOOR_Y, RING * sinf(a)}), tx[i], ty[i]);
   }
-  for (int i = 0; i < 48; i++)
-    for (int o = -1; o <= 1; o++) th::cv.drawLine(tx[i], ty[i] + o, tx[i + 1], ty[i + 1] + o, th::p15(th::EMBER));
-  for (int i = 0; i < 48; i++) th::cv.drawLine(tx[i], ty[i], tx[i + 1], ty[i + 1], th::p15(th::ORANGE));
+  for (int i = 0; i < 48; i++)                    // in the scene's own colours
+    for (int o = -1; o <= 1; o++) th::cv.drawLine(tx[i], ty[i] + o, tx[i + 1], ty[i + 1] + o, th::p15(sc.ember));
+  for (int i = 0; i < 48; i++) th::cv.drawLine(tx[i], ty[i], tx[i + 1], ty[i + 1], th::p15(sc.accent));
   nItem = nP = 0;
   struct Spr { float depth, x, y, size, spin, dim; int kind; } sp[6];
   int nsp = 0;
