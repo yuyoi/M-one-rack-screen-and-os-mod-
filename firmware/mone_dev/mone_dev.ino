@@ -10,6 +10,7 @@
 #include <SPI.h>
 #include "display.h"
 #include "theme.h"         // PS1 heavy-metal look: canvas, pixel font, animations (after display.h)
+#include "ring3d.h"        // the MODE ring: low-poly 3D icons (after theme.h)
 #include "controls.h"
 #include "ota.h"
 #include "buttons.h"
@@ -668,7 +669,8 @@ void loop() {
     case 'V': cmdValues(); Serial.printf("VALUES dsp-sense GPIO3 = %s\n", digitalRead(PIN_DSP_SENSE) ? "HIGH (on)" : "LOW (off)");
               Serial.printf("VALUES wifi %d dBm\n", WiFi.RSSI());
               Serial.printf("VALUES menu mode=%d fx1=%d fx2=%d bypass=%d/%d\n", menu.mode, menu.fx1, menu.fx2, menu.byp1, menu.byp2);
-              Serial.printf("VALUES ui frame %lu ms\n", (unsigned long)uiLastPushMs);
+              Serial.printf("VALUES ui frame %lu ms push, %lu ms draw (page %d)\n", (unsigned long)uiLastPushMs,
+                            (unsigned long)uiLastDrawMs, uiPage);
               break;
     case 'T': testStart(); Serial.println("button test page (R2 twice on the panel = exit)"); break;
     case 'A': Serial.printf("LEVEL %06lX\n", dspLevel()); break;   // output envelope (no halt)

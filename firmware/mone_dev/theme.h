@@ -3,6 +3,7 @@
 // Pages draw into a 120x120 canvas pushed at 2x: chunky pixels like a PS1 menu, one full push per frame.
 // Animated parts take a phase (millis()): the header lava flows, flames flicker, the selection bar shimmers, rows slide in.
 #pragma once
+#include "sprites.h"               // generated: tools/gen_sprites.py
 
 namespace th {
 
@@ -245,25 +246,58 @@ static void knob(int cx, int cy, int r, float v, const char *label) {
   text(cx, cy + r + 3, label, BLACK, 1, 'm');
 }
 
-// knobs 0..1 (the 3 pots), led 0..1 (lit when active; flicker it with the audio level)
-void pedal(const char *name, uint32_t col, const float *knobs, const char *const *labels, float led, uint32_t ph) {
-  vignette(0.5f);
+// nk knobs (0..1 each, up to 6: one row up to 3, else two rows), led 0..1 (lit when active; flicker it with the audio
+// level). dx shifts the whole pedal (the PEDAL board slides one out and the next in); bg = false skips the background.
+void pedal(const char *name, uint32_t col, int nk, const float *knobs, const char *const *labels, float led, uint32_t ph,
+           int dx = 0, bool bg = true) {
+  if (bg) vignette(0.5f);
   const uint32_t body[3] = {mix(col, WHITE, 0.25f), col, mix(col, BLACK, 0.25f)};
-  bevel(14, 4, 106, 116, p15(col), p15(mix(col, WHITE, 0.5f)), p15(mix(col, BLACK, 0.5f)));
-  grad(15, 5, 106, 116, body, 3);
-  for (int k = -20; k < 100; k += 12)                  // hazard stripe band
-    cv.fillTriangle(15 + k, 26, 21 + k, 26, 29 + k, 18, p15(BLACK)), cv.fillTriangle(15 + k, 26, 29 + k, 18, 23 + k, 18, p15(BLACK));
-  for (int s = 0; s < 4; s++) cv.fillCircle(s & 1 ? 102 : 18, s & 2 ? 112 : 8, 2, p15(STEEL_L));   // screws
-  for (int i = 0; i < 3; i++) knob(31 + i * 29, 42, 9, knobs[i], labels[i]);
-  bevel(26, 66, 94, 82, BLACK, p15(STEEL), p15(STEEL_D));
-  metal(60, 68, name, textW(name, 2) <= 64 ? 2 : 1, YELLOW, RED, 'm');
+  bevel(14 + dx, 4, 106 + dx, 116, p15(col), p15(mix(col, WHITE, 0.5f)), p15(mix(col, BLACK, 0.5f)));
+  grad(15 + dx, 5, 106 + dx, 116, body, 3);
+  bool two = nk > 3;
+  int sy = two ? 10 : 18;                              // hazard stripe band (clipped to the body)
+  for (int k = -20; k < 100; k += 12)
+    for (int y = sy; y <= sy + 8; y++)
+      for (int x = 15 + k + (sy + 8 - y); x < 21 + k + (sy + 8 - y); x++)
+        if (x >= 15 && x < 106) cv.drawPixel(x + dx, y, p15(BLACK));
+  for (int s = 0; s < 4; s++) cv.fillCircle((s & 1 ? 102 : 18) + dx, s & 2 ? 112 : 8, 2, p15(STEEL_L));   // screws
+  for (int i = 0; i < nk; i++) {
+    int row = two && i >= 3, inRow = two ? (row ? nk - 3 : 3) : nk, j = row ? i - 3 : i;
+    int x = 60 + (int)((j - (inRow - 1) / 2.0f) * 29) + dx;
+    knob(x, two ? (row ? 56 : 30) : 42, two ? 7 : 9, knobs[i], labels[i]);
+  }
+  int py = two ? 76 : 66;                              // name plate, LED, footswitch
+  bevel(26 + dx, py, 94 + dx, py + 16, BLACK, p15(STEEL), p15(STEEL_D));
+  metal(60 + dx, py + 2, name, textW(name, 2) <= 64 ? 2 : 1, YELLOW, RED, 'm');
   float l = constrain(led, 0.0f, 1.0f);
-  cv.fillCircle(60, 90, 6, p15(mix(0x200402, 0x5A0A04, l)));   // LED glow rings
-  cv.fillCircle(60, 90, 4, p15(mix(0x300604, RED, l)));
-  cv.fillCircle(60, 90, 2, p15(mix(0x400806, 0xFF785A, l)));
-  cv.fillEllipse(60, 106, 10, 8, p15(STEEL_L));       // footswitch
-  cv.drawEllipse(60, 106, 10, 8, BLACK);
-  cv.fillEllipse(60, 106, 6, 5, p15(STEEL));
+  int ly = two ? 97 : 90, lr = two ? 4 : 6;
+  cv.fillCircle(60 + dx, ly, lr, p15(mix(0x200402, 0x5A0A04, l)));   // LED glow rings
+  cv.fillCircle(60 + dx, ly, lr - 2, p15(mix(0x300604, RED, l)));
+  cv.fillCircle(60 + dx, ly, max(lr - 4, 1), p15(mix(0x400806, 0xFF785A, l)));
+  int fy = two ? 108 : 106;
+  cv.fillEllipse(60 + dx, fy, 10, 7, p15(STEEL_L));   // footswitch
+  cv.drawEllipse(60 + dx, fy, 10, 7, BLACK);
+  cv.fillEllipse(60 + dx, fy, 6, 4, p15(STEEL));
+}
+
+// ---------------------------------------------------------------- pixel-art sprites (sprites.h)
+// 16x16 at scale sc, top-left x,y. tint = the colour for the 'P' keys (darker / lighter variants too); dim 0..1
+// darkens the whole sprite (ring-menu items at the back).
+void sprite(int x, int y, const spr::Sprite &s, int sc = 1, uint32_t tint = RED, float dim = 0) {
+  for (int j = 0; j < 16; j++)
+    for (int i = 0; i < 16; i++) {
+      char ch = s.rows[j][i];
+      if (ch == '.') continue;
+      const char *k = strchr(s.keys, ch);
+      if (!k) continue;
+      uint32_t c = s.pal[k - s.keys];
+      if (c == 0xFFFFFFFF) c = tint;
+      else if (c == 0xFFFFFFFE) c = mix(tint, BLACK, 0.4f);
+      else if (c == 0xFFFFFFFD) c = mix(tint, WHITE, 0.3f);
+      if (dim > 0) c = mix(c, BLACK, dim);
+      if (sc == 1) cv.drawPixel(x + i, y + j, p15(c));
+      else cv.fillRect(x + i * sc, y + j * sc, sc, sc, p15(c));
+    }
 }
 
 // ---------------------------------------------------------------- boot splash: spinning flat-shaded low-poly diamond

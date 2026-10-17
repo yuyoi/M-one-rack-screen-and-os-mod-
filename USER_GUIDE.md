@@ -131,18 +131,27 @@ right column. Press each once; turn the encoder to skip a dead one. The map is s
 
 | Control | Does |
 |---|---|
-| T1 / T2 / T3 | FX page / TUNE page / SYSTEM page (live inputs, WiFi IP + signal in dBm) |
-| T4 | PRESET page: the 56 presets |
+| T1 / T2 / T3 | shortcuts: VOCAL FX page / SETTINGS (tune) / SYSTEM (live inputs, WiFi IP + signal in dBm) |
+| T4 | PRESETS (opens on a playing preset) |
 | T5 | EDIT page: the effect's own settings |
-| T6 / B6 | cursor up / down |
-| encoder | change the selected value |
-| R1 / B4 / B5 | enter (value +1); on the SYSTEM page: button test |
-| R2 | back to the FX page |
+| T6 / B6 | cursor up / down (MODE ring and PEDAL board: turn / swap) |
+| encoder | change the selected value (MODE ring: turn it; PEDAL board: swap pedals) |
+| R1 / B4 / B5 | enter: open (ring item, preset list, a pedal's settings), else value +1; SYSTEM: button test |
+| R2 | EXIT: one step back along the way you came, all the way to the MODE ring |
 | B1 / B2 | bypass FX 1 / FX 2 (a preset: B1 bypasses its whole chain) |
 | B3 | reverb FREEZE on / off (while REVERB plays) |
 | POT 1 / 2 / 3 | volume (40 dB taper, far left = off) / dry-wet mix / tone (low-pass, far right = open); with AMP playing: level / GAIN / TREBLE |
 | hold R1 + T6, 3 s | reboot the ESP (only while the face is asleep) |
 
+- MODE ring (the boot screen; EXIT always leads back here): five low-poly 3D icons turning over a Castlevania night,
+  Crash Bandicoot 2 style (`firmware/mone_dev/ring3d.h`; sprites from `tools/gen_sprites.py`): tuxedo cat = VOCAL FX,
+  vinyl = PRESETS, the red '69 stompbox = PEDAL, chrome cog = SETTINGS, bible = SYSTEM. The knob turns it, enter
+  opens, a gold crown sits on the mode that is playing, the status bar says what plays. Every page remembers its
+  cursor, so EXIT then enter lands you where you were.
+- PEDAL board: guitar pedals, each drawn with its own knobs (HEAVY: LEVEL TONE, COMP: LEVEL BLEND, REVERSE: LEVEL MIX
+  TONE, AMP: LEVEL GAIN BASS MID TREB PRES). The knob slides to the next pedal; the sound follows once it rests.
+  POT 1 = LEVEL; POT 2 / 3 = the pedal's MIX / TONE where it has them (AMP: GAIN / TREBLE); a pedal without a MIX knob
+  plays all wet. Enter opens the pedal's settings. Careful: HEAVY is +60 dB. Real-pedal sims come next (DSP).
 - PRESET page (T4): the loaded preset (number, name, type, chain, a hint like TONE DARK). Turn the knob (or T6 / B6)
   for the previous / next one: it loads once the knob rests. Enter opens the list by type (STUDIO, TUNE, HARMONY,
   LO-FI / RADIO, MONSTER, AMBIENT), enter again opens a type, enter on a preset loads it; R2 goes back a level.

@@ -38,19 +38,28 @@ static inline uint8_t encRead() {
   return (((in >> (PIN_ENC_A - 32)) & 1) << 1) | ((in >> (PIN_ENC_B - 32)) & 1);
 }
 
-// One step per detent, decided by the FIRST FALLING edge when the knob leaves the detent (both pins high):
+// One step per detent. The FIRST FALLING edge when the knob leaves the detent (both pins high) gives the direction:
 // A falls first = +1, B falls first = -1. Rising edges are ignored: the TC board slows A's rise (RC), so the
 // rise order is wrong turning right (logged 2026-10-16: right = 11>01>00>01>11, which a full decoder nets to 0).
-// Falls are fast (contact to GND), so they are reliable. Re-armed once both pins are high again.
+// The step only COUNTS once both pins are low (00) and >= 150 us after that first fall: a real click always gets
+// there, a noise spike never does (2026-10-17: screen pushes put spikes on the slow A pin, 30-40 false steps per
+// click on the MODE ring). Re-armed once both pins are high again.
 // Runs on every pin change (interrupt), so steps are never lost while a screen frame is being pushed.
+static volatile int8_t encDir = 0;         // direction of the first fall since the detent, 0 = none yet
+static volatile uint32_t encLeave = 0;     // CPU cycle count at that fall
 void IRAM_ATTR encIsr() {
   uint8_t s = encRead();
   if (s == encPrev) return;
-  if (encPrev == 3 && encAcc == 0) {       // leaving the detent
-    if (s == 1) { encSteps = encSteps + 4; encAcc = 1; }        // 11 -> 01: A fell first
-    else if (s == 2) { encSteps = encSteps - 4; encAcc = 1; }   // 11 -> 10: B fell first
+  uint32_t now = esp_cpu_get_cycle_count();
+  if (encPrev == 3 && encAcc == 0) {       // leaving the detent: remember which pin fell first
+    if (s == 1) { encDir = 1; encLeave = now; }          // 11 -> 01: A fell first
+    else if (s == 2) { encDir = -1; encLeave = now; }    // 11 -> 10: B fell first
   }
-  if (s == 3) encAcc = 0;                  // back in a detent: re-arm
+  if (s == 0 && encDir && encAcc == 0 && now - encLeave > 150 * 240) {   // both low, and not a spike (240 MHz)
+    encSteps = encSteps + 4 * encDir;
+    encAcc = 1;
+  }
+  if (s == 3) { encAcc = 0; encDir = 0; }  // back in a detent: re-arm
   encPrev = s;
 }
 

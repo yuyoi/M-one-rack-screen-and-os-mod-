@@ -20,8 +20,12 @@ bool onceReadXLong(const uint16_t *aa, uint32_t *value, int n);
 
 #include "presets.h"                        // generated: tools/gen_presets.py from dsp/presets.py
 
-enum { PAGE_FX, PAGE_TUNE, PAGE_SYS, PAGE_TEST, PAGE_EDIT, PAGE_PRESET };
-int uiPage = PAGE_FX;
+enum { PAGE_FX, PAGE_TUNE, PAGE_SYS, PAGE_TEST, PAGE_EDIT, PAGE_PRESET, PAGE_MAIN, PAGE_PEDAL };
+int uiPage = PAGE_MAIN;                     // boots on the MODE ring; EXIT steps back to it
+
+// What is playing (the ring's crown): VOCAL FX = the FX page's own setup, PRESETS = a preset, PEDAL = the pedal board
+enum { MODE_VOCAL, MODE_PRESETS, MODE_PEDAL };
+static int uiMode = MODE_VOCAL;
 
 static const char *MODE_NAMES[] = {"SINGLE", "DOUBLE", "DBL-SINGLE", "CHAIN"};   // CHAIN (3): set by presets
 static const char *FX_NAMES[] = {"CLEAN", "HEAVY", "REVERSE", "COMP", "TUNE", "VOX", "AMP", "RADIO", "FORMANT", "OCTAVE",
@@ -58,6 +62,16 @@ struct MenuState {
 } menu;
 static bool presetDirty = false;   // a setting changed after the preset was loaded
 
+// Navigation: every step forward pushes where you were; EXIT pops one step, all the way back to the MODE ring.
+// Going to a page that is already on the path cuts back to it (no loops). Each page keeps its own cursor.
+struct NavPos { uint8_t page, level; };
+static NavPos navStack[10];
+static int navN = 0;
+static void navGo(int page, int level = 0);
+static void navBack();
+static int tuneCur = 0;            // SETTINGS (tune) page row
+static uint32_t animUntil = 0;     // a ring turn / pedal swap is animating: redraw fast
+
 static int wrapv(int v, int n) { return ((v % n) + n) % n; }
 static int fxStep(int fx, int d) {           // next effect id, stepping over the DSP placeholders
   fx = wrapv(fx + d, N_FX);
@@ -74,7 +88,7 @@ static int lastPage = -1;
 static char uiStat[32] = "";
 static uint32_t uiStatCol = th::YELLOW, uiStatT = 0;
 int sysMv[5] = {0, 0, 0, 0, 0};             // pots 1-3, ladders 1-2 (mV), set by controlsTick
-uint32_t uiLastPushMs = 0;                  // how long the last frame took (serial 'V')
+uint32_t uiLastPushMs = 0, uiLastDrawMs = 0; // the last frame: push to the screen / drawing (serial 'V')
 
 // Status messages show for 2.5 s, then the page's own hint comes back
 void displayStatus(const char *line, uint32_t col) {
@@ -132,7 +146,7 @@ static void testSource(char *s, size_t n, int src, int val) {
 void uiShow();
 
 void testStart() {
-  uiPage = PAGE_TEST;
+  navGo(PAGE_TEST);
   testSeen = 0;
   testLast = testPrevKey = -1;
   testEnc = 0;
@@ -143,7 +157,7 @@ void testStart() {
 }
 
 static void testPress(int b) {
-  if (b == K_R2 && testPrevKey == K_R2) { uiPage = PAGE_FX; menu.cursor = 0; uiShow(); return; }
+  if (b == K_R2 && testPrevKey == K_R2) { navBack(); uiShow(); return; }
   testPrevKey = b;
   testLast = b;
   testSeen |= 1 << b;
@@ -177,7 +191,7 @@ void testPots(const int *v) {
 // ---- pages
 static void drawFX(uint32_t now) {
   backdrop();
-  th::header("FX", now, 0);
+  th::header("VOCAL FX", now);
   char v[24];
   bool ch = menu.mode == 3;                  // CHAIN (a preset): FX 1 / FX 2 are not used
   snprintf(v, sizeof v, ch && menu.byp1 ? "CHAIN OFF" : "%s", MODE_NAMES[menu.mode]);
@@ -220,14 +234,14 @@ static void drawFX(uint32_t now) {
 
 static void drawTune(uint32_t now) {
   backdrop();
-  th::header("TUNE", now, 1);
+  th::header("SETTINGS", now);
   char v[16];
-  th::row(28, "KEY", KEY_NAMES[menu.key], menu.cursor == 0, false, now, th::slide(now, pageT0, 0));
-  th::row(46, "SCALE", SCALE_NAMES[menu.scale], menu.cursor == 1, false, now, th::slide(now, pageT0, 1));
+  th::row(28, "TUNE KEY", KEY_NAMES[menu.key], tuneCur == 0, false, now, th::slide(now, pageT0, 0));
+  th::row(46, "SCALE", SCALE_NAMES[menu.scale], tuneCur == 1, false, now, th::slide(now, pageT0, 1));
   snprintf(v, sizeof v, menu.speed >= 9 ? "%d ROBOT" : (menu.speed <= 2 ? "%d NATURAL" : "%d"), menu.speed);
-  th::row(64, "SPEED", v, menu.cursor == 2, false, now, th::slide(now, pageT0, 2));
+  th::row(64, "SPEED", v, tuneCur == 2, false, now, th::slide(now, pageT0, 2));
   bool on = menu.fx1 == 4 || (menu.mode != 0 && menu.fx2 == 4);
-  if (!on) th::text(60, 89, "SET AN FX TO TUNE", th::p15(th::RED), 1, 'm');
+  if (!on) th::text(60, 89, "TUNE IS NOT PLAYING", th::p15(th::STEEL_L), 1, 'm');
   statusOr("KNOB:EDIT T6/B6:MOVE");
 }
 
@@ -235,7 +249,7 @@ extern bool dspAwake;                        // face.h: the power switch says th
 
 static void drawSys(uint32_t now) {
   backdrop();
-  th::header("SYSTEM", now, 2);
+  th::header("SYSTEM", now);
   char s[32];
   th::text(4, 27, "POTS", th::p15(th::STEEL_L));
   for (int k = 0; k < 3; k++) {              // pot bars
@@ -264,16 +278,22 @@ static void drawSys(uint32_t now) {
 
 static void drawEdit(uint32_t now);         // below, with the effect settings
 static void drawPreset(uint32_t now);       // below, with the presets
+static void drawMain(uint32_t now);         // below: the MODE ring (ring3d.h)
+void pedalPageDraw(uint32_t now);           // face.h: the PEDAL board (needs the singing level for its LED)
 
 void uiRedraw(uint32_t now) {
   if (!th::ready) return;
+  uint32_t t0 = millis();
   if (uiPage == PAGE_FX) drawFX(now);
   else if (uiPage == PAGE_TUNE) drawTune(now);
   else if (uiPage == PAGE_SYS) drawSys(now);
   else if (uiPage == PAGE_EDIT) drawEdit(now);
   else if (uiPage == PAGE_PRESET) drawPreset(now);
+  else if (uiPage == PAGE_MAIN) drawMain(now);
+  else if (uiPage == PAGE_PEDAL) pedalPageDraw(now);
   else drawTest(now);
   uint32_t t = millis();
+  uiLastDrawMs = t - t0;
   th::present();
   uiLastPushMs = millis() - t;
 }
@@ -289,12 +309,14 @@ void uiShow() {
 
 // Call every loop: keeps the visible page animated
 void presetTick();
+void pedalTick();
 void uiAnimTick() {
   presetTick();                              // a preset picked with the knob loads once the knob rests
+  pedalTick();                               // likewise a pedal
   if (!th::ready || !liveOn || faceOn || learnIdx >= 0) return;
   static uint32_t last = 0;
   uint32_t now = millis();
-  uint32_t period = now - pageT0 < 600 ? 40 : 110;   // fly-in fast, then ~9 fps for the lava / flames / shimmer
+  uint32_t period = now - pageT0 < 600 || now < animUntil ? 33 : 110;   // fly-in / turns fast, then ~9 fps
   if (!uiDirty && now - last < period) return;
   last = now;
   uiDirty = false;
@@ -335,8 +357,9 @@ static void tuneSend() {
 // Pedal mode (AMP playing): POT1 volume, POT2 / POT3 = AMP's GAIN / TREBLE (potsToDsp), the mix all wet, tone open.
 static const uint8_t POT_AA[4] = {0x2F, 0x3D, 0x3E, 0x3C};   // dry gain, wet gain, tone k, volume (dsp/os.py)
 static int potSent[3] = {-9999, -9999, -9999};
-static bool potAmp = false;                  // the last pot words went out in pedal mode
+static int potSig = -1;                     // which pot mapping the last pot words used (potMapSig)
 static bool fxInPath(int fx);
+static int pedalPots();                      // PEDAL board: bit 0 = POT2 is the pedal's MIX, bit 1 = POT3 its TONE
 
 static uint32_t q23(float x) { return (uint32_t)lroundf(constrain(x, 0.0f, 0.99999988f) * 8388608.0f) & 0xFFFFFF; }
 
@@ -346,10 +369,11 @@ static void potFill(const int *mv, uint32_t *v) {
   float vol = p[0] < 0.02f ? 0.0f : powf(10.0f, 2.0f * (p[0] - 1.0f));      // 40 dB audio taper, far left = off
   float fc = 400.0f * powf(50.0f, p[2]);                                     // tone: 400 Hz .. 20 kHz low-pass
   float k = p[2] > 0.97f ? 1.0f : 1.0f - expf(-6.2831853f * fc / 44100.0f);  // far right = no filter
-  bool amp = fxInPath(6);
-  v[0] = amp ? 0 : q23(1.0f - p[1]);         // linear crossfade: CLEAN stays at the same level at any mix
-  v[1] = amp ? 0x7FFFFF : q23(p[1]);
-  v[2] = amp ? 0x7FFFFF : q23(k);
+  int pp = pedalPots();                      // -1 = not on the pedal board
+  bool mix = pp < 0 ? !fxInPath(6) : (pp & 1), tone = pp < 0 ? !fxInPath(6) : (pp & 2);
+  v[0] = mix ? q23(1.0f - p[1]) : 0;         // linear crossfade: CLEAN stays at the same level at any mix
+  v[1] = mix ? q23(p[1]) : 0x7FFFFF;         // a pedal without a MIX knob (and AMP) plays all wet, tone open
+  v[2] = tone ? q23(k) : 0x7FFFFF;
   v[3] = q23(vol);
 }
 
@@ -750,9 +774,11 @@ static bool pushParams() {
 // short halt of the DSP, so they are kept rare)
 // Pedal mode: a pot that moves takes over AMP's GAIN / TREBLE (its words go out in the same halt); until then the
 // EDIT page's values stay, so picking AMP never jumps.
+static int potMapSig() { return (pedalPots() + 1) * 2 + fxInPath(6); }   // changes = resend the pot words
+
 void potsToDsp(const int *mv) {
   static uint32_t last = 0;
-  bool amp = fxInPath(6), moved[3], any = amp != potAmp;
+  bool amp = fxInPath(6), moved[3], any = potMapSig() != potSig;
   for (int k = 0; k < 3; k++) { moved[k] = abs(mv[k] - potSent[k]) > 40; any = any || moved[k]; }
   if (!any || millis() - last < 100 || !dspAwake || learnIdx >= 0) return;
   last = millis();
@@ -765,7 +791,7 @@ void potsToDsp(const int *mv) {
   if (amp && moved[1]) { ampP[1].v = constrain((mv[1] + 15) / 31, 0, 100); g |= AG_GAIN; }
   if (amp && moved[2]) { ampP[4].v = constrain((mv[2] + 15) / 31, 0, 100); g |= AG_TMB; }
   if (g) { n = ampFill(aa, w, n, g); uiDirty = true; }
-  if (onceWriteXLong(aa, w, n)) { for (int k = 0; k < 3; k++) potSent[k] = mv[k]; potAmp = amp; }
+  if (onceWriteXLong(aa, w, n)) { for (int k = 0; k < 3; k++) potSent[k] = mv[k]; potSig = potMapSig(); }
 }
 
 // Serial 'a': "a<type> <gain> <bass> <mid> <treble> <presence> <resonance> <drive> <sag> <master>" prints the AMP words
@@ -801,7 +827,7 @@ static void ampFollow() {
   int n = ampFill(aa, w, 0, AG_ALL);
   potFill(sysMv, v);
   for (int k = 0; k < 4; k++) { aa[n] = POT_AA[k]; w[n++] = v[k]; }
-  if (onceWriteXLong(aa, w, n)) { for (int k = 0; k < 3; k++) potSent[k] = sysMv[k]; potAmp = true; }
+  if (onceWriteXLong(aa, w, n)) { for (int k = 0; k < 3; k++) potSent[k] = sysMv[k]; potSig = potMapSig(); }
 }
 
 // ---- Presets (presets.h; T4 = PRESET page): CHAIN mode + the preset's writes, all in one halt. TUNE's snap map and
@@ -913,7 +939,7 @@ static bool applyPreset(int i) {
   for (int k = 0; k < p.chainN; k++)                    // HARMONY: both maps in the key
     if (p.chain[k] == 10) { n = harmMapFill(1, aa, w, harmMapFill(0, aa, w, n)); break; }
   bool ok = onceWriteXLong(aa, w, n);
-  if (ok) { menu.preset = i; presetDirty = false; presetSave(); ampFollow(); }
+  if (ok) { menu.preset = i; presetDirty = false; presetSave(); uiMode = MODE_PRESETS; ampFollow(); }
   Serial.printf("PRESET %02d %s: %d writes %s\n", p.n, p.name, n, ok ? "ok" : "FAILED");
   displayStatus(ok ? "PRESET LOADED" : "DSP NOT ANSWERING", ok ? 0x30D060 : th::RED);
   return ok;
@@ -953,25 +979,28 @@ static void presetEnter() {
   int idx[N_PRESETS];
   if (presetLevel == 0) {
     int cur = presetPending >= 0 ? presetPending : menu.preset;
-    presetLevel = 1;
+    navGo(PAGE_PRESET, 1);
     presetCur = cur >= 0 ? PRESETS[cur].type : 0;
   } else if (presetLevel == 1) {
     int n = presetTypeList(presetType = presetCur, idx);
-    presetLevel = 2;
+    navGo(PAGE_PRESET, 2);
     presetCur = 0;
     for (int r = 0; r < n; r++) if (idx[r] == menu.preset) presetCur = r;
   } else {
     if (presetCur < presetTypeList(presetType, idx)) { presetPending = -1; applyPreset(idx[presetCur]); }
-    presetLevel = 0;
+    navGo(PAGE_PRESET, 0);
   }
   pageT0 = millis();
 }
 
-static void presetBack() {
-  if (presetLevel == 0) { uiPage = PAGE_FX; menu.cursor = 0; return; }
-  presetLevel--;
-  if (presetLevel == 1) presetCur = presetType;
-  pageT0 = millis();
+// PRESETS mode always shows a preset that plays: the one loaded last (NVS), else 01
+static void presetOpen() {
+  navGo(PAGE_PRESET, 0);
+  if (menu.preset < 0 && presetPending < 0) {
+    int sp = presetSavedIdx();
+    applyPreset(sp >= 0 && sp < N_PRESETS ? sp : 0);
+  }
+  if (menu.preset >= 0) uiMode = MODE_PRESETS;
 }
 
 static void drawPreset(uint32_t now) {
@@ -1014,7 +1043,7 @@ static void drawPreset(uint32_t now) {
       v[k] = 0;
       th::text(60, 90, v, th::p15(th::ASH), 1, 'm');
     }
-    statusOr("KNOB:LOAD ENT:LIST");
+    statusOr("KNOB:NEXT ENT:LIST");
     return;
   }
   int idx[N_PRESETS];
@@ -1040,6 +1069,146 @@ static void drawPreset(uint32_t now) {
   statusOr(presetLevel == 1 ? "ENT:OPEN R2:BACK" : "ENT:LOAD R2:BACK");
 }
 
+// ---- Navigation (declared at the top)
+static void navSet(int page, int level) {
+  uiPage = page;
+  if (page == PAGE_PRESET) {
+    presetLevel = level;
+    if (level == 1) presetCur = presetType;      // back on the type list: on the type you were in
+  }
+  pageT0 = millis();
+}
+
+static void navGo(int page, int level) {
+  if (page == uiPage && (page != PAGE_PRESET || level == presetLevel)) return;
+  for (int i = 0; i < navN; i++)                 // already on the path: cut back to it
+    if (navStack[i].page == page && (page != PAGE_PRESET || navStack[i].level == level)) {
+      navN = i;
+      navSet(page, level);
+      return;
+    }
+  if (navN < 10) navStack[navN++] = {(uint8_t)uiPage, (uint8_t)presetLevel};
+  navSet(page, level);
+}
+
+static void navBack() {
+  if (navN > 0) { NavPos p = navStack[--navN]; navSet(p.page, p.level); }
+  else if (uiPage != PAGE_MAIN) navSet(PAGE_MAIN, 0);
+}
+
+// ---- PEDAL board: guitar pedals, each drawn with its own knobs. The knob (or T6 / B6) swaps pedals; the sound
+// follows once the knob rests. POT1 = level on every pedal; POT2 / POT3 = the pedal's own knobs where it has them
+// (AMP: GAIN / TREBLE, its other knobs come from its EDIT page). The real-pedal sims come next (DSP).
+enum { SRC_POT1, SRC_POT2, SRC_POT3, SRC_AMP };  // SRC_AMP + row = an ampP row
+struct PedalKnob { const char *label; uint8_t src; };
+struct PedalDef { uint8_t fx; const char *name; uint32_t col; uint8_t nk; PedalKnob k[6]; };
+static const PedalDef PEDALS[] = {
+  {1, "HEAVY", 0xFF6A00, 2, {{"LEVEL", SRC_POT1}, {"TONE", SRC_POT3}}},
+  {3, "COMP", 0x2A6CFF, 2, {{"LEVEL", SRC_POT1}, {"BLEND", SRC_POT2}}},
+  {2, "REVERSE", 0x9A3CE0, 3, {{"LEVEL", SRC_POT1}, {"MIX", SRC_POT2}, {"TONE", SRC_POT3}}},
+  {6, "AMP", 0xE01818, 6, {{"LEVEL", SRC_POT1}, {"GAIN", SRC_AMP + 1}, {"BASS", SRC_AMP + 2}, {"MID", SRC_AMP + 3},
+                           {"TREB", SRC_AMP + 4}, {"PRES", SRC_AMP + 5}}},
+};
+static const int N_PEDALS = sizeof PEDALS / sizeof PEDALS[0];
+static int pedalIdx = 1;                 // COMP: the gentlest first
+static int pedalPrev = -1, pedalPending = -1, pedalDir = 1;
+static uint32_t pedalAt = 0, pedalSwapT = 0;
+
+static int pedalPots() {
+  if (uiMode != MODE_PEDAL || menu.mode != 0 || menu.fx1 != PEDALS[pedalIdx].fx) return -1;
+  int m = 0;
+  for (int i = 0; i < PEDALS[pedalIdx].nk; i++) {
+    if (PEDALS[pedalIdx].k[i].src == SRC_POT2) m |= 1;
+    if (PEDALS[pedalIdx].k[i].src == SRC_POT3) m |= 2;
+  }
+  return m;
+}
+
+float pedalKnobVal(const PedalKnob &k) {          // 0..1 for the drawing
+  if (k.src <= SRC_POT3) return constrain(sysMv[k.src] / 3100.0f, 0.0f, 1.0f);
+  const FxParam &p = ampP[k.src - SRC_AMP];
+  return (p.v - p.lo) / (float)(p.hi - p.lo);
+}
+
+static void pedalApply(int idx) {                 // SINGLE + this pedal, its pot words and settings
+  const PedalDef &pd = PEDALS[idx];
+  menu.mode = 0; menu.fx1 = pd.fx; menu.byp1 = false; menu.preset = -1;
+  uiMode = MODE_PEDAL;
+  uint8_t aa[6] = {0x20, 0x21, POT_AA[0], POT_AA[1], POT_AA[2], POT_AA[3]};
+  uint32_t v[6] = {0, pd.fx};
+  potFill(sysMv, v + 2);
+  bool ok = onceWriteXMany(aa, v, 6);
+  if (ok) { for (int k = 0; k < 3; k++) potSent[k] = sysMv[k]; potSig = potMapSig(); }
+  ampFollow();
+  displayStatus(ok ? pd.name : "DSP NOT ANSWERING", ok ? pd.col : th::RED);
+}
+
+static void pedalOpen() {
+  navGo(PAGE_PEDAL);
+  for (int i = 0; i < N_PEDALS; i++)              // already playing one of the pedals: stay on it
+    if (menu.mode == 0 && menu.preset < 0 && PEDALS[i].fx == menu.fx1) pedalIdx = i;
+  pedalPrev = -1;
+  pedalPending = -1;
+  pedalApply(pedalIdx);
+}
+
+static void pedalKnob(int d) {
+  pedalPrev = pedalIdx;
+  pedalIdx = wrapv(pedalIdx + d, N_PEDALS);
+  pedalDir = d > 0 ? 1 : -1;
+  pedalSwapT = millis();
+  animUntil = pedalSwapT + 400;
+  pedalPending = pedalIdx;
+  pedalAt = millis();
+}
+
+void pedalTick() {                                // every loop: the sound follows once the knob rests
+  if (pedalPending < 0 || millis() - pedalAt < 250) return;
+  int i = pedalPending;
+  pedalPending = -1;
+  pedalApply(i);
+  uiDirty = true;
+}
+
+// ---- MODE ring: VOCAL FX, PRESETS, PEDAL, SETTINGS, SYSTEM (ring3d.h draws it)
+static const char *const MAIN_NAMES[5] = {"VOCAL FX", "PRESETS", "PEDAL", "SETTINGS", "SYSTEM"};
+static int ringTarget = 0;                        // unbounded: the ring turns the short way
+static float ringPos = 0;
+static uint32_t ringArriveT = 0, ringLastDraw = 0;
+
+static void mainMove(int d) {
+  ringTarget += d;
+  ringArriveT = millis() + 350;                   // the arrival spin starts as the turn settles
+  animUntil = millis() + 1600;
+}
+
+static void mainEnter() {
+  switch (wrapv(ringTarget, 5)) {
+    case 0: navGo(PAGE_FX); break;
+    case 1: presetOpen(); break;
+    case 2: pedalOpen(); break;
+    case 3: navGo(PAGE_TUNE); break;
+    default: navGo(PAGE_SYS);
+  }
+}
+
+static void drawMain(uint32_t now) {
+  float dt = ringLastDraw ? (now - ringLastDraw) : 0;
+  ringLastDraw = now;
+  ringPos += (ringTarget - ringPos) * (1 - expf(-dt / 150.0f));
+  if (fabsf(ringTarget - ringPos) < 0.002f) ringPos = ringTarget;
+  float arrive = now < ringArriveT ? 0 : constrain((now - ringArriveT) / 1100.0f, 0.0f, 1.0f);
+  arrive = 1 - (1 - arrive) * (1 - arrive) * (1 - arrive);
+  if (ringArriveT == 0) arrive = 1;
+  r3::drawRing(now, ringPos - 5 * floorf(ringTarget / 5.0f), uiMode, arrive, MAIN_NAMES);
+  char s[24];                                     // what is playing
+  if (uiMode == MODE_PRESETS && menu.preset >= 0) snprintf(s, sizeof s, "> %02d %s", PRESETS[menu.preset].n, PRESETS[menu.preset].name);
+  else if (uiMode == MODE_PEDAL) snprintf(s, sizeof s, "> PEDAL %s", PEDALS[pedalIdx].name);
+  else if (menu.mode == 0) snprintf(s, sizeof s, "> %s", menu.byp1 ? "BYPASS" : FX_NAMES[menu.fx1]);
+  else snprintf(s, sizeof s, "> %s%s%s", FX_SHORT[menu.fx1], menu.mode == 1 ? "+" : ">", FX_SHORT[menu.fx2]);
+  statusOr(s);
+}
+
 // At ESP start (e.g. after an OTA reboot the DSP keeps playing): take over the DSP's mode / FX so the screen shows
 // what is actually playing. Values out of range (stock firmware running) are ignored.
 void uiAdoptDsp() {
@@ -1061,6 +1230,9 @@ void uiAdoptDsp() {
         presetDecode(sp);
         menu.strip = lv[0] == 1;
         menu.preset = sp;
+        uiMode = MODE_PRESETS;
+        ringTarget = 1;
+        ringPos = 1;
       }
     }
   }
@@ -1090,18 +1262,20 @@ bool uiPushAll() {
   memcpy(aa + 16, POT_AA, 4);
   potFill(mv, v + 16);
   bool ok = onceWriteXMany(aa, v, 20) && pushParams() && (!pr || applyPreset(menu.preset));
-  if (ok) { for (int k = 0; k < 3; k++) potSent[k] = mv[k]; potAmp = fxInPath(6); }
+  if (ok) { for (int k = 0; k < 3; k++) potSent[k] = mv[k]; potSig = potMapSig(); }
   displayStatus(ok ? "PANEL -> DSP" : "DSP NOT ANSWERING", ok ? 0x30D060 : th::RED);
   return ok;
 }
 
 // Change the selected value by d (encoder steps or K_R1)
 static void uiChange(int d) {
+  if (uiPage == PAGE_MAIN) { mainMove(d); uiShow(); return; }
+  if (uiPage == PAGE_PEDAL) { pedalKnob(d); uiShow(); return; }
   if (uiPage == PAGE_EDIT) { editChange(d); if (menu.preset >= 0) presetDirty = true; uiShow(); return; }
   if (uiPage == PAGE_PRESET) { presetKnob(d); uiShow(); return; }
-  int c = menu.cursor;
+  int c = uiPage == PAGE_TUNE ? tuneCur : menu.cursor;
   if (uiPage == PAGE_FX) {
-    if (c < 3) menu.preset = -1;                                         // a manual setup: no preset any more
+    if (c < 3) { menu.preset = -1; uiMode = MODE_VOCAL; }               // a manual setup: no preset any more
     if ((c == 1 || c == 2) && menu.mode == 3) {                          // FX 1 / FX 2 leave the chain
       menu.mode = c == 1 ? 0 : 1;
       menu.byp1 = false;
@@ -1125,17 +1299,31 @@ static void uiChange(int d) {
   uiShow();
 }
 
+static int editMem[N_FX + 1];                    // EDIT cursor per effect (STRIP = the last slot)
+static int editMemIdx(int fx) { return fx == FX_STRIP ? N_FX : constrain(fx, 0, N_FX - 1); }
+
 static void cursorMove(int d) {
   if (uiPage == PAGE_SYS) return;
+  if (uiPage == PAGE_MAIN) { mainMove(d); uiShow(); return; }
+  if (uiPage == PAGE_PEDAL) { pedalKnob(d); uiShow(); return; }
   if (uiPage == PAGE_PRESET) { presetKnob(d); uiShow(); return; }
   if (uiPage == PAGE_EDIT) {
     int n = fxParams(editFx()).n;
     if (n) editCursor = wrapv(editCursor + d, n);
+    editMem[editMemIdx(editFx())] = editCursor;
     uiShow();
     return;
   }
-  menu.cursor = wrapv(menu.cursor + d, uiPage == PAGE_FX ? 4 : 3);     // FX: MODE, FX 1, FX 2, STRIP
+  if (uiPage == PAGE_TUNE) tuneCur = wrapv(tuneCur + d, 3);
+  else menu.cursor = wrapv(menu.cursor + d, 4);                         // FX: MODE, FX 1, FX 2, STRIP
   uiShow();
+}
+
+static void editOpen() {                          // T5 / enter on the pedal board: the effect's settings
+  editStrip = uiPage == PAGE_FX && menu.cursor == 3;
+  navGo(PAGE_EDIT);
+  int n = fxParams(editFx()).n;
+  editCursor = n ? constrain(editMem[editMemIdx(editFx())], 0, n - 1) : 0;
 }
 
 static void bypass(int which) {
@@ -1175,22 +1363,21 @@ void uiButton(int b) {
   if (!liveOn) uiShow();           // a serial command had the screen: take it back first
   if (uiPage == PAGE_TEST) { testPress(b); return; }
   switch (b) {
-    case K_T1: uiPage = PAGE_FX; menu.cursor = 0; uiShow(); break;
-    case K_T2: uiPage = PAGE_TUNE; menu.cursor = 0; uiShow(); break;
-    case K_T3: uiPage = PAGE_SYS; uiShow(); break;
-    case K_T4: uiPage = PAGE_PRESET; presetLevel = 0; uiShow(); break;
-    case K_T5: editStrip = uiPage == PAGE_FX && menu.cursor == 3; uiPage = PAGE_EDIT; editCursor = 0; uiShow(); break;
+    case K_T1: navGo(PAGE_FX); uiShow(); break;
+    case K_T2: navGo(PAGE_TUNE); uiShow(); break;
+    case K_T3: navGo(PAGE_SYS); uiShow(); break;
+    case K_T4: presetOpen(); uiShow(); break;
+    case K_T5: editOpen(); uiShow(); break;
     case K_T6: cursorMove(-1); break;
     case K_B6: cursorMove(1); break;
-    case K_R1: case K_B4: case K_B5:                         // ENTER (value +1; SYSTEM: button test; PRESET: list)
+    case K_R1: case K_B4: case K_B5:                         // ENTER: open (ring, pedal, preset list), else value +1
       if (uiPage == PAGE_SYS) testStart();
+      else if (uiPage == PAGE_MAIN) { mainEnter(); uiShow(); }
+      else if (uiPage == PAGE_PEDAL) { editOpen(); uiShow(); }
       else if (uiPage == PAGE_PRESET) { presetEnter(); uiShow(); }
       else uiChange(1);
       break;
-    case K_R2:                                               // back (PRESET: one level up)
-      if (uiPage == PAGE_PRESET) presetBack(); else { uiPage = PAGE_FX; menu.cursor = 0; }
-      uiShow();
-      break;
+    case K_R2: navBack(); uiShow(); break;                   // EXIT: one step back along the way you came
     case K_B1: bypass(1); break;
     case K_B2: bypass(2); break;
     case K_B3: freezeToggle(); break;
@@ -1218,17 +1405,18 @@ void uiTick() {
 // Serial keys (PC): '[' ']' cursor, '-' '=' value
 void menuKey(char k) {
   liveOn = true;
-  if (uiPage == PAGE_SYS || uiPage == PAGE_TEST || uiPage == PAGE_EDIT) uiPage = PAGE_FX;
+  if (uiPage != PAGE_FX && uiPage != PAGE_TUNE) navGo(PAGE_FX);
   if (k == '[') cursorMove(-1);
   else if (k == ']') cursorMove(1);
   else if (k == '-') uiChange(-1);
   else if (k == '=') uiChange(1);
 }
 
-void menuDraw() { uiPage = PAGE_FX; uiShow(); }
+void menuDraw() { navGo(PAGE_FX); uiShow(); }
 
 // Which pedal the idle screen shows (or -1 = vocal: the face sings): FX1, else FX2 when it is in the chain
 int idlePedal() {
+  if (uiMode == MODE_PEDAL && menu.mode == 0) return menu.fx1;     // the pedal board's pedal
   if (menu.mode == 3) {                      // CHAIN: its first pedal-type effect
     for (int i = 0; i < menu.chainN; i++) if (menu.chain[i] < N_FX && FX_PEDAL[menu.chain[i]]) return menu.chain[i];
     return -1;

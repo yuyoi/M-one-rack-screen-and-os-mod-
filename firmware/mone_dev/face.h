@@ -73,14 +73,45 @@ static void notesTick(uint32_t now, bool singing, int mx, int my) {
   }
 }
 
-static void pedalDraw(uint32_t now, int fx) {
+// A pedal as drawn on the PEDAL board (its own knobs) or, for any other pedal-type effect, LEVEL / MIX / TONE
+static void pedalBody(uint32_t now, int fx, int idx, int dx, bool bg) {
   bool byp = fx == menu.fx1 ? menu.byp1 : menu.byp2;
+  float led = byp || !dspAwake ? 0.0f : 0.45f + 0.55f * singLev;
+  if (idx >= 0) {
+    const PedalDef &pd = PEDALS[idx];
+    float k[6];
+    const char *lab[6];
+    for (int i = 0; i < pd.nk; i++) { k[i] = pedalKnobVal(pd.k[i]); lab[i] = pd.k[i].label; }
+    th::pedal(pd.name, pd.col, pd.nk, k, lab, led, now, dx, bg);
+    return;
+  }
   float k[3];
   for (int i = 0; i < 3; i++) k[i] = constrain(sysMv[i] / 3100.0f, 0.0f, 1.0f);
-  static const char *const L[3] = {"VOL", "MIX", "TONE"}, *const LA[3] = {"LEVEL", "GAIN", "TONE"};
-  bool amp = fx == 6;                        // AMP: pedal mode, its knobs = the GAIN / TREBLE it plays with
-  if (amp) { k[1] = ampP[1].v / 100.0f; k[2] = ampP[4].v / 100.0f; }
-  th::pedal(FX_NAMES[fx], FX_COL[fx], k, amp ? LA : L, byp || !dspAwake ? 0.0f : 0.45f + 0.55f * singLev, now);
+  static const char *const L[3] = {"LEVEL", "MIX", "TONE"};
+  th::pedal(FX_NAMES[fx], FX_COL[fx], 3, k, L, led, now, dx, bg);
+}
+
+static int pedalIndexOf(int fx) {
+  for (int i = 0; i < N_PEDALS; i++) if (PEDALS[i].fx == fx) return i;
+  return -1;
+}
+
+static void pedalDraw(uint32_t now, int fx) { pedalBody(now, fx, pedalIndexOf(fx), 0, true); }
+
+// The PEDAL board page: the pedal, sliding out for the next one when the knob swaps (arrows at the edges)
+void pedalPageDraw(uint32_t now) {
+  singTick(now);                             // keeps the LED flickering with the output
+  float t = constrain((now - pedalSwapT) / 220.0f, 0.0f, 1.0f);
+  t = 1 - (1 - t) * (1 - t);
+  if (pedalPrev >= 0 && t < 1) {
+    int off = (int)(120 * t) * pedalDir;
+    pedalBody(now, PEDALS[pedalPrev].fx, pedalPrev, -off, true);
+    pedalBody(now, PEDALS[pedalIdx].fx, pedalIdx, 120 * pedalDir - off, false);
+  } else pedalBody(now, PEDALS[pedalIdx].fx, pedalIdx, 0, true);
+  for (int s = -1; s <= 1; s += 2) {         // swap arrows
+    int x = s < 0 ? 5 : 114;
+    th::cv.fillTriangle(x - 2 * s, 56, x + 2 * s, 60, x - 2 * s, 64, th::p15(th::YELLOW));
+  }
 }
 
 static void faceDraw(uint32_t now) {
