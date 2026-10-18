@@ -40,7 +40,8 @@ def main():
     sys.path.insert(0, DSP)
     import presets as PR
     tmpd = tempfile.mkdtemp()
-    for name in ('autotune.py', 'vocal.py', 'vocal2.py', 'vocal3.py', 'vocal4.py', 'vocal5.py', 'vocal6.py', 'amp.py'):
+    for name in ('autotune.py', 'vocal.py', 'vocal2.py', 'vocal3.py', 'vocal4.py', 'vocal5.py', 'vocal6.py', 'amp.py',
+                 'dirt.py', 'mod.py', 'filt.py'):
         subprocess.run([PY, os.path.join(DSP, name)], check=True, capture_output=True)
     subprocess.run([PY, os.path.join(DSP, 'os.py'), 'meter'], check=True, capture_output=True)
     subprocess.run([PY, os.path.join(DSP, 'codec_on.py'), 'dac=00'], check=True, capture_output=True, cwd=DSP)
@@ -64,15 +65,16 @@ def main():
         open(osk, 'w').write(base + '\n' + ' '.join(w) + '\n')
         for f in ('autotune.hex', 'vocal.hex', 'vocal_tab.hex', 'vocal2.hex', 'vocal2_tab.hex', 'vocal3.hex',
                   'vocal3_tab.hex', 'vocal4.hex', 'vocal4_tab.hex', 'vocal5.hex', 'vocal5_tab.hex', 'vocal6.hex', 'amp.hex',
-                  'amp_tab.hex'):
+                  'amp_tab.hex', 'vocal3b.hex', 'dirt.hex', 'mod.hex', 'filt.hex'):
             out = run(port, 'load', os.path.join(DSP, f))
             if 'verify OK' not in out:
                 raise SystemExit('%s: %s' % (f, out))
-        for f in (osk, mute):
+        for f in ((osk, mute) if fx is ids[0] else (osk,)):
             out = run(port, 'load', f)
             if 'verify OK' not in out:
                 raise SystemExit('%s: %s' % (f, out))
-        run(port, 'go', '900')
+        run(port, 'go', '900' if fx is ids[0] else 'A00')   # codec set up ONCE per power-up (suspect: re-running
+                                                            # codec_on per id is what leaves the AK4524 with no clocks)
         if chain:                                    # poke CHAIN mode in, then back into the kernel loop
             time.sleep(1)
             from asm56 import Asm, R5
