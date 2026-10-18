@@ -23,12 +23,12 @@ radio = rm.Radio(exact=True, mode=0)
 form = pm.PsolaDSP(*pm.params(1.0, 0.78))
 y, ref, worst = [], [], 0
 for k in range(len(xi)):
-    out, w = s.run_audio([xi[k]], [xi[k]], max_instr_per_frame=200000)
+    out, w = s.run_audio([2 * xi[k]], [xi[k]], max_instr_per_frame=200000)
     worst = max(worst, w)
     y.append(out[-1])
     r = radio.step(2 * xi[k] / Q)
     ref.append(form.step(int(round(r * Q)), s.X.get(0x0D, 0)))
-y, ref = np.array(y), np.array(ref)
+y, ref = np.array(y[1:]), np.array(ref[:-1])          # TX1 carries the previous frame's output
 err = np.abs(y - ref)
 print('chain RADIO -> FORMANT: worst %d instr/frame | max err %d LSB | out pk %.2f | %.0f s' % (
     worst, err.max(), np.abs(y).max() / Q, time.time() - t))

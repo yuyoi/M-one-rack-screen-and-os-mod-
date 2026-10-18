@@ -21,17 +21,17 @@ def hexwords(name):
 
 
 x = np.concatenate([am.voice(220, 0.6, vib=0.3) * 2.0, np.zeros(int(0.35 * FS)), am.voice(330, 0.3) * 0.08])
-xi = np.round(x / 2 * (Q - 1)).astype(int)                  # L = R = x/2: the kernel sums them
+xi = np.round(x / 2 * (Q - 1)).astype(int)                  # L = x (the kernel reads the left input only), R = x/2 (ignored)
 xs = 2 * xi / Q
 
 t = time.time()
 from sim_radio import boot_os                               # the OS as `boot` loads it (+ vocal_tab.hex)
 s = boot_os(5)                                              # SINGLE, FX1 = VOX
-out, worst = s.run_audio(list(xi), list(xi), max_instr_per_frame=100000)
-y = np.array(out[1::2], float) / Q                          # the sim records signed TX1 words
+out, worst = s.run_audio(list(2 * xi), list(xi), max_instr_per_frame=100000)
+y = np.array(out[3::2], float) / Q                          # signed TX1 words; each frame sends the previous output
 ref = vm.Vox(exact=True).run(xs)
 n = min(len(y), len(ref))
-y, ref = y[:n], ref[:n]                                     # same frame: the right slot is output right away
+y, ref = y[:n], ref[:n]                                     # y[0] = output of frame 0 (sent one frame later)
 err = np.abs(y - ref)
 seg = lambda a, b: slice(int(a * FS), int(b * FS))
 pk = lambda v: 20 * np.log10(np.abs(v).max() + 1e-12)

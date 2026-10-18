@@ -4,7 +4,8 @@ Params (X short, written live by the ESP over J8):
   X:$20 mode   0 = SINGLE (FX1)   1 = DOUBLE (FX1 || FX2, mixed)   2 = DOUBLE-SINGLE (FX1 -> FX2)
   X:$21 FX1    X:$22 FX2   effect ids: 0 clean, 1 heavy, 2 reverse, 3 comp, 4 tune (autotune.py at P:$400),
                            5 vox, 6 amp (amp.py + amp_tab), 7 radio (vocal.py: load vocal.hex + vocal_tab.hex too),
-                           8 formant, 9 octave (vocal2.py), 10 harmony, 11 doubler (vocal4.py + vocal4_tab), 12 reverb, 13 delay (vocal3.py + vocal3_tab), 14 shimmer (vocal4.py), 15 swell (vocal5.py), 16 grain (vocal6.py)
+                           8 formant, 9 octave (vocal2.py), 10 harmony, 11 doubler (vocal4.py + vocal4_tab), 12 reverb, 13 delay (vocal3.py + vocal3_tab + vocal3b), 14 shimmer (vocal4.py), 15 swell (vocal5.py), 16 grain (vocal6.py),
+                           17 dirt (dirt.py + amp_tab), 18 mod (mod.py + dirt.py), 19 phaser, 20 wah (filt.py): PEDAL board engines
   tune: X:$0B retune speed (Q23 per sample), X:$23-$2E snap map (signed semitones per pitch class, 0 = chromatic)
   output stage (the pots, after every mode): X:$2F dry gain, X:$3D wet gain (mix: the ESP sends 1-m and m),
     X:$3E tone k (one-pole low-pass, $7FFFFF = off), X:$3C volume; X:$3F = tone filter state
@@ -31,6 +32,9 @@ import vocal3  # noqa: E402  (vocal3.py at P:$1000: REVERB, DELAY; vocal3_tab.he
 import vocal4  # noqa: E402  (vocal4.py at P:$1220: HARMONY, DOUBLER, SHIMMER; vocal4_tab.hex in SRAM)
 import vocal5  # noqa: E402  (vocal5.py at P:$0310: STRIP input stage, SWELL; vocal5_tab.hex in SRAM)
 import vocal6  # noqa: E402  (vocal6.py at P:$0060, the unused vector area: GRAIN)
+import contextlib, io  # noqa: E402,E401
+with contextlib.redirect_stdout(io.StringIO()):
+    import dirt, mod, filt  # noqa: E402,E401  (pedal engines: dirt P:$0E00, mod P:$0EE0, filt P:$0960)
 
 BASE = 0xA00
 METER = 'meter' in sys.argv[1:]        # py os.py meter: histogram of idle spins per frame at X:$1400-$14FF
@@ -55,7 +59,7 @@ def data(n): fix.append((len(p), n, 0)); p.append(0)                        # ta
 def absx(W, reg, addr): w(E('Movex_ea', W=W, d=R5[reg], M=6, R=0), addr)     # move x:$long <-> reg
 HIST = 0x1400                          # meter build: X:$1400-$14FF (AMP owns X:$1000-$12FF)
 CH_N, CH_I = 0x0200, 0x0208            # CHAIN: X:$0200 n, $0201-$0206 ids, $0207 strip flag, $0208 loop index
-N_IDS = 17                             # effect table size (asserted below)
+N_IDS = 21                             # effect table size (asserted below)
 
 def call_fx(param):                     # jsr table[x:param]
     ext(0x66F400, 'table')              # move #table,r6
@@ -82,6 +86,8 @@ w(0x565C00, 0x01418C); jcc(0x0E2000, 'clr')   # clear the reverse buffer
 for a in (0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x38, 0x3A, 0x3B, 0x20, 0x22, 0x19):
     w(0x560000 | (a << 8))              # move a,x:$aa  (0)
 w(0x57F400, STEP, 0x553700)             # reverse step d = +STEP
+w(E('Movex_ea', W=1, d=R5['R4'], **EA_IMM), 0x0900, 0x200013, E('Rep_xxx', i=0x700 & 0xFF, h=0x700 >> 8),
+  E('Movex_ea', W=0, d=R5['A'], **ea('(R4)+')))   # clear X:$0900-$0FFF (PEDAL engines: params, state, rings; TC leaves junk)
 w(0x56F400, 0x7FFFFF, 0x563900)         # comp g = 1.0
 w(0x56F400, 0x000000, 0x542100)         # FX1 = clean (A1 -> x:$21); the ESP pushes its panel state after boot
 w(0x56F400, 0x000002, 0x542200)         # FX2 = reverse
@@ -106,6 +112,7 @@ else:
     ext(0x01B388, 'loop')               # jclr #8,x:SAISR,loop
 w(0x0445C9)                             # movep x:RX1,x1
 ext(0x01B3A6, 'left')                   # jset #6,x:SAISR,left
+w(0x45B100, 0x04C5C1)                   # right word, slot 0: TX1 = x:$31 now, so it lands in slot 1 (R) whatever the FX cost
 w(0x20001B, 0x577000, autotune.DETF)    # clr b ; move b,x:DETF  (new frame: the pitch detector may run once)
 if METER:
     w(0x23EF00, 0x20000B)               # b = n7 ; tst b
@@ -113,10 +120,13 @@ if METER:
     w(0x01418C, 0x21FF00)               # n7 = b - 1
     jcc(0x0C0000, 'm_keep')
     L('m_on')
+    from asm56 import Asm as _A; from asmh import H as _H
+    _a = _A(0); _h = _H(_a); _h.mv('R7', 'B'); _h.cmpi(HIST + 0xFF, 'B'); w(*_a.link())
+    jcc(0x0E7000, 'm_keep')             # jgt: a stalled codec (thousands of spins) must not write past the histogram
     w(0x57E700, 0x014188, 0x576700)     # x:(r7) += 1  (r7 = HIST + spins this frame)
     L('m_keep')
     w(0x67F400, HIST)                   # r7 = HIST
-w(0x56B000, 0x200060, 0x21C500)         # x1 = sat(L+R)
+w(0x45B000)                             # x1 = L (left in only: an open right input adds no noise)
 absx(1, 'A', CH_N + 7); w(0x200003)     # a = strip flag ; tst a
 jcc(0x0EA000, 'no_strip')               # jeq
 w(0x0BF080, vocal5.FX_STRIP)            # jsr fx_strip (input stage for presets: gate, de-ess, comp, EQ, drive)
@@ -169,7 +179,7 @@ w(0x20000D); jcc(0x0E1000, 'lvl_keep')  # cmp a,b ; jge (decayed env still above
 w(0x21CF00)                             # b = a  (new peak)
 L('lvl_keep')
 w(0x571900, 0x08CF3C)                   # env = b ; movep b,x:OGDB
-w(0x453100, 0x04C5C1)                   # x:$31 = out ; movep x1,x:TX1
+w(0x453100)                             # x:$31 = out (sent from the next two TX writes: L and R carry the same sample)
 ext(0x0AF080, 'loop')
 L('left')
 w(0x453000, 0x45B100, 0x04C5C1)         # store L in ; output last result
@@ -182,6 +192,7 @@ data('fx_amp')                         # 6 = AMP (amp.py, research session): ent
 data('fx_radio'); data('fx_formant'); data('fx_octave')
 data('fx_harmony'); data('fx_doubler')
 data('fx_reverb'); data('fx_delay'); data('fx_shimmer'); data('fx_swell'); data('fx_grain')
+data('fx_dirt'); data('fx_mod'); data('fx_phaser'); data('fx_wah')    # 17-20: PEDAL board (pedal-sims session)
 labels['fx_tune'] = FX_TUNE
 labels['fx_vox'] = vocal.FX_VOX
 labels['fx_radio'] = vocal.FX_RADIO
@@ -189,6 +200,7 @@ labels['fx_formant'], labels['fx_octave'] = vocal2.FX_FORMANT, vocal2.FX_OCTAVE
 labels['fx_reverb'], labels['fx_delay'] = vocal3.FX_REVERB, vocal3.FX_DELAY
 labels['fx_harmony'], labels['fx_doubler'] = vocal4.FX_HARMONY, vocal4.FX_DOUBLER
 labels['fx_shimmer'], labels['fx_swell'], labels['fx_grain'] = vocal4.FX_SHIMMER, vocal5.FX_SWELL, vocal6.FX_GRAIN
+labels['fx_dirt'], labels['fx_mod'], labels['fx_phaser'], labels['fx_wah'] = dirt.FX_DIRT, mod.FX_MOD, filt.FX_PHASER, filt.FX_WAH
 labels['fx_amp'] = 0x0C00                # amp.py: X1 in -> X1 out, restores M0-M6, first call copies its table
 
 # ---------------- clean
@@ -256,7 +268,7 @@ for i, n, op in fix:
     p[i] = (op | labels[n]) if op else labels[n]
 end = BASE + len(p) - 1
 # P RAM is $0000-$13FF: TC's boot sets OMR MS (measured: OMR = $000B81). $0C00-$13FF is kept for the amp sim.
-assert end <= 0xBFF, 'kernel runs into P:$0C00 (AMP): %X' % end
+assert end < vocal3.HEADS_P, 'kernel runs into the DELAY head loop (vocal3b) at P:%04X: %X' % (vocal3.HEADS_P, end)
 print(listing(p, base=BASE))
 print('words=%d  end=P:%04X  labels=%s' % (len(p), end, {k: '%04X' % v for k, v in labels.items() if k.startswith(('fx', 'table'))}))
 _out = os.path.join(HERE, 'os_meter.hex' if METER else 'os.hex')   # atomic: parallel simulator runs read it

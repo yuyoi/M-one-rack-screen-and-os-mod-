@@ -31,10 +31,13 @@ def boot_os(fx1):
             runpy.run_path(os.path.join(HERE, '..', 'vocal5.py'), run_name='__main__')
             runpy.run_path(os.path.join(HERE, '..', 'vocal6.py'), run_name='__main__')
             runpy.run_path(os.path.join(HERE, '..', 'amp.py'), run_name='__main__')
+            for name in ('dirt.py', 'mod.py', 'filt.py'):
+                runpy.run_path(os.path.join(HERE, '..', name), run_name='__main__')
         labels = runpy.run_path(os.path.join(HERE, '..', 'os.py'), run_name='labels')['labels']
     ob, ow = hexwords('os.hex')
     s = Sim(ow, ob)
-    for name in ('autotune.hex', 'vocal.hex', 'vocal2.hex', 'vocal3.hex', 'vocal4.hex', 'vocal5.hex', 'vocal6.hex', 'amp.hex'):
+    for name in ('autotune.hex', 'vocal.hex', 'vocal2.hex', 'vocal3.hex', 'vocal4.hex', 'vocal5.hex', 'vocal6.hex', 'amp.hex',
+                 'vocal3b.hex', 'dirt.hex', 'mod.hex', 'filt.hex'):
         b, w = hexwords(name)
         s.P.update({b + i: v for i, v in enumerate(w)})
     for name in ('vocal_tab.hex', 'vocal2_tab.hex', 'vocal3_tab.hex', 'vocal4_tab.hex', 'vocal5_tab.hex', 'amp_tab.hex'):
@@ -55,8 +58,8 @@ if __name__ == '__main__':
     t = time.time()
     s = boot_os(7)
     s.X[0x0210] = mode
-    out, worst = s.run_audio(list(xi), list(xi), max_instr_per_frame=100000)
-    y = np.array(out[1::2], float) / Q
+    out, worst = s.run_audio(list(2 * xi), list(xi), max_instr_per_frame=100000)
+    y = np.array(out[3::2], float) / Q
     ref = rm.Radio(exact=True, mode=mode).run(xs)
     n = min(len(y), len(ref))
     err = np.abs(y[:n] - ref[:n])

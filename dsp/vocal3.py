@@ -144,11 +144,12 @@ h.rts()
 
 # ============================================================ DELAY (id 13), mirrors delay_model.py
 DBUF, DS, DP = 0x03C000, 0x0330, 0x0290
-(D_PTR, D_PH, D_XP, D_LP, D_WO, D_WOP, D_ENV, D_S, D_C, D_DRY, D_TMP) = range(11)
-T_TIME, T_FB, T_WET, T_KT, T_DUCK, T_TAPS, T_WOW, T_SAT, T_KW = range(9)
+HEADS_P = 0x0BA0                          # DELAY head loop (vocal3b.hex): kernel spare P, the meter build ends ~$0B85
+(D_PTR, D_PH, D_XP, D_LP, D_WO, D_WOP, D_ENV, D_S, D_C, D_DRY, D_TMP, D_Q1, D_Q0, D_PA1, D_PA0, D_M, D_Z) = range(17)
+T_TIME, T_FB, T_WET, T_KT, T_DUCK, T_TAPS, T_WOW, T_SAT, T_KW, T_HEADS = range(10)
 
 a.label('delay_init')
-h.clr('A'); h.li('R0', DS); h.rep(D_TMP + 1); h.stxi('A', '(R0)+')
+h.clr('A'); h.li('R0', DS); h.rep(D_Z + 1); h.stxi('A', '(R0)+')
 h.li('R0', DBUF)
 for _ in range(dm.NBUF // 4096):
     h.rep(4095); h.stxi('A', '(R0)+')
@@ -171,10 +172,7 @@ h.xr('X0', D_XP); h.mv('X1', 'A'); h.add('X0', 'A'); h.alu('Asr_D', d=0); h.mv('
 h.xr('Y0', T_KW, R=5); h.xr('X0', D_C); h.xr('A', D_S); h.mac('X0', 'Y0', 'A'); h.xw('A', D_S)           # LFO
 h.mv('A', 'X0'); h.xr('A', D_C); h.mac('X0', 'Y0', 'A', k=1); h.xw('A', D_C)
 h.xr('X0', D_S); h.xr('Y0', T_WOW, R=5); h.mpy('X0', 'Y0', 'A'); h.xr('X0', T_TIME, R=5); h.add('X0', 'A')   # pos
-h.mv('A0', 'Y1'); h.tfr('A', 'B'); h.clr('A'); h.mv('Y1', 'A1'); h.lsr(1, 'A'); h.mv('A1', 'Y1')        # frac
-h.mv('B1', 'N0'); h.nop(); h.ldxi('(R0+N0)', 'X0')
-h.addi(1, 'B'); h.mv('B1', 'N0'); h.nop(); h.ldxi('(R0+N0)', 'A')
-h.sub('X0', 'A'); h.mv('A', 'X1'); h.mpy('X1', 'Y1', 'A'); h.add('X0', 'A'); h.mv('A', 'X0')            # z
+a.jsr('d_heads')                                                                                       # z (P:$0BA0)
 h.xr('Y0', D_LP); h.mv('X0', 'A'); h.sub('Y0', 'A'); h.mv('A', 'X1')                                   # tone
 h.xr('Y1', T_KT, R=5); h.xr('B', D_LP); h.mac('X1', 'Y1', 'B'); h.xw('B', D_LP); h.mv('B', 'X0')
 h.xr('A', T_SAT, R=5); h.tst('A'); j('EQ', 'd_ns')                                                     # tape
@@ -203,10 +201,37 @@ h.xr('Y0', T_WET, R=5); h.mpy('X0', 'Y0', 'A'); h.mv('A', 'Y0')
 h.mv('X1', 'A'); h.mac('Y1', 'Y0', 'A'); h.mv('A', 'X1')
 h.rts()
 
+a.labels['d_heads'] = HEADS_P
 words = a.link()
 end = BASE + len(words) - 1
 assert end <= END, 'vocal3.py runs past P:%04X: %X' % (END, end)
 assert RTAB3 + len(TAB) <= 0x031600, 'vocal3_tab runs into vocal2_tab'
+
+# ---- the head loop lives in the kernel's spare P (vocal3 is full): vocal3b.hex at P:$0BA0
+# d_heads: A = pos (TIME + WOW*lfo, A1 int : A0 frac), R0/R3/R5 as fx_delay -> X0 = z (sum of the heads in the mask)
+b = Asm(HEADS_P)
+hb = H(b)
+jb = hb.j
+b.label('d_heads')
+hb.xw('A1', D_Q1); hb.xw('A0', D_Q0); hb.clr('B'); hb.xw('B1', D_PA1); hb.xw('B0', D_PA0); hb.xw('B1', D_Z)
+hb.xr('B', T_HEADS, R=5); hb.andi(7, 'B'); jb('NE', 'd_m'); hb.addi(1, 'B')                                # 0 = head 1
+b.label('d_m')
+hb.xw('B1', D_M)
+b.label('d_hl')                                                                                        # head k: k*pos
+hb.xr('A', D_PA1); hb.xr('A0', D_PA0); hb.xr('B', D_Q1); hb.xr('B0', D_Q0); hb.add('B', 'A')
+hb.xw('A1', D_PA1); hb.xw('A0', D_PA0)
+hb.xr('B', D_M); hb.alu('Lsr_D', D=1); hb.xw('B1', D_M); jb('CC', 'd_sk')        # LSR B: C = bit 0
+hb.mv('A0', 'Y1'); hb.tfr('A', 'B'); hb.clr('A'); hb.mv('Y1', 'A1'); hb.lsr(1, 'A'); hb.mv('A1', 'Y1')        # frac
+hb.mv('B1', 'N0'); hb.nop(); hb.ldxi('(R0+N0)', 'X0')
+hb.addi(1, 'B'); hb.mv('B1', 'N0'); hb.nop(); hb.ldxi('(R0+N0)', 'A')
+hb.sub('X0', 'A'); hb.mv('A', 'X1'); hb.mpy('X1', 'Y1', 'A'); hb.add('X0', 'A'); hb.mv('A', 'X0')            # z_k
+hb.xr('A', D_Z); hb.add('X0', 'A'); hb.xw('A', D_Z)                                                       # z += z_k
+b.label('d_sk')
+hb.xr('B', D_M); hb.tst('B'); jb('NE', 'd_hl')
+hb.xr('X0', D_Z)
+hb.rts()
+wordsb = b.link()
+assert HEADS_P + len(wordsb) <= 0x0C00, 'vocal3b runs into AMP: %X' % (HEADS_P + len(wordsb))
 VOCAL3_INIT, FX_REVERB, FX_DELAY, DELAY_INIT = (a.labels[n] for n in ('vocal3_init', 'fx_reverb', 'fx_delay',
                                                                        'delay_init'))
 if __name__ == '__main__':
@@ -215,5 +240,7 @@ if __name__ == '__main__':
     print('words=%d end=P:%04X  init=%04X reverb=%04X delay=%04X  table %d words at %06X' % (
         len(words), end, VOCAL3_INIT, FX_REVERB, FX_DELAY, len(TAB), RTAB3))
     a.hexfile(os.path.join(HERE, 'vocal3.hex'))
+    b.hexfile(os.path.join(HERE, 'vocal3b.hex'))
+    print('vocal3b: %d words at P:%04X-%04X' % (len(wordsb), HEADS_P, HEADS_P + len(wordsb) - 1))
     _t = os.path.join(HERE, 'vocal3_tab.hex')
     open(_t, 'w').write('%X\n%s\n' % (RTAB3, ' '.join('%06X' % (w & 0xFFFFFF) for w in TAB)))

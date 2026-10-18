@@ -26,11 +26,11 @@ y, ref, worst = [], [], 0
 for k in range(len(xi)):
     if freeze and k == int(0.15 * FS):
         s.X[0x0286] = 1; model.p[6] = 1
-    out, w = s.run_audio([xi[k]], [xi[k]], max_instr_per_frame=200000)
+    out, w = s.run_audio([2 * xi[k]], [xi[k]], max_instr_per_frame=200000)
     worst = max(worst, w)
     y.append(out[-1])
     ref.append(model.step(int(2 * xi[k])))
-y, ref = np.array(y), np.array(ref)
+y, ref = np.array(y[1:]), np.array(ref[:-1])          # TX1 carries the previous frame's output
 err = np.abs(y - ref)
 bad = np.flatnonzero(err > 2)
 tail = y[int(0.3 * FS):] / Q

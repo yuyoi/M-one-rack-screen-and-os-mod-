@@ -17,11 +17,11 @@ for k, v in enumerate(prm):
 model = gm.Grain(prm)
 y, ref, worst = [], [], 0
 for k in range(len(xi)):
-    out, w = s.run_audio([xi[k]], [xi[k]], max_instr_per_frame=200000)
+    out, w = s.run_audio([2 * xi[k]], [xi[k]], max_instr_per_frame=200000)
     worst = max(worst, w)
     y.append(out[-1])
     ref.append(model.step(int(2 * xi[k])))
-y, ref = np.array(y), np.array(ref)
+y, ref = np.array(y[1:]), np.array(ref[:-1])          # TX1 carries the previous frame's output
 err = np.abs(y - ref)
 bad = np.flatnonzero(err > 2)
 print('GRAIN: worst %d instr/frame | max err %d LSB (first > 2 at %s) | out rms %.3f | %.0f s' % (

@@ -38,11 +38,11 @@ for k, val in enumerate(prm):
 model = pm.PsolaDSP(*prm)
 y, ref, worst = [], [], 0
 for k in range(n):
-    out, w = s.run_audio([xi[k]], [xi[k]], max_instr_per_frame=200000)
+    out, w = s.run_audio([2 * xi[k]], [xi[k]], max_instr_per_frame=200000)
     worst = max(worst, w)
     y.append(out[-1])
     ref.append(model.step(int(xq[k]), s.X.get(0x0D, 0)))
-y, ref = np.array(y), np.array(ref)
+y, ref = np.array(y[1:]), np.array(ref[:-1])          # TX1 carries the previous frame's output
 err = np.abs(y - ref)
 bad = np.flatnonzero(err > 0)
 seg = slice(20000, n)

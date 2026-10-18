@@ -41,8 +41,8 @@ for pc, d in enumerate(smap):
     s.X[0x23 + pc] = d & 0xFFFFFF
 x = m.voice(f0, 0.6)
 xi = np.round(x / 2 * (Q - 1)).astype(int)
-out, worst = s.run_audio(list(xi), list(xi), max_instr_per_frame=3_000_000)
-y = np.array([v - (1 << 24) if v >> 23 else v for v in out[1::2]], float) / Q
+out, worst = s.run_audio(list(2 * xi), list(xi), max_instr_per_frame=3_000_000)
+y = np.array([v - (1 << 24) if v >> 23 else v for v in out[3::2]], float) / Q
 f = m.pitch_of(y[16000:26000])
 n = 69 + 12 * np.log2(f / 440)
 tgt = 440 * 2 ** ((round(n) - 69) / 12)

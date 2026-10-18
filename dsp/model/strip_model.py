@@ -42,8 +42,13 @@ def shelf(f, gdb, kind):
     return [v / a[0] for v in b] + [a[1] / a[0], a[2] / a[0]]
 
 
-def strip_params(gate_db=-50, deess=0.12, comp=0.25, mk=1.5, drive=0.0, eq=None):
-    return [q(10 ** (gate_db / 20)), q(deess), q(comp), q(mk / 4), q(drive / 16)] + (eq or eq_coefs())
+LC_FLAT = [q(0.5), 0, 0, 0, 0]                          # low cut off (b0/2 = 0.5: a wire)
+
+
+def strip_params(gate_db=-50, deess=0.12, comp=0.25, mk=1.5, drive=0.0, eq=None, lc=True):
+    """15 words: GATE DEESS COMP MK/4 DRIVE/16, EQ biquad (+5..+9), LC biquad (+10..+14: 100 Hz HP or flat)"""
+    return ([q(10 ** (gate_db / 20)), q(deess), q(comp), q(mk / 4), q(drive / 16)] + (eq or eq_coefs())
+            + (LC if lc else LC_FLAT))
 
 
 def swell_params(thr_db=-42, ms=450):
@@ -67,7 +72,7 @@ class Strip:
     def step(self, x):
         gate, deess, comp, mk, drive = self.p[:5]
         eqc = [s24(v) for v in self.p[5:10]]
-        x, self.lc = bq([s24(v) for v in LC], self.lc, x)
+        x, self.lc = bq([s24(v) for v in (self.p[10:15] if len(self.p) >= 15 else LC)], self.lc, x)
         self.genv = st(max(ld(abs(x)), mpy(ENV_DEC, self.genv)))                      # gate
         tgt, k = (Q - 1, GK_OPEN) if self.genv > gate else (0, GK_CLOSE)
         self.gg = st(ld(self.gg) + mpy(k, st(ld(tgt) - ld(self.gg))))

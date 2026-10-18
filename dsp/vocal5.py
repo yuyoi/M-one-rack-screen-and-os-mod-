@@ -20,7 +20,7 @@ import vox_model as vm  # noqa: E402
 
 BASE, END = 0x0310, 0x03FF
 LCTAB = 0x031A80                                      # SRAM: the 5 low-cut coefficients (vocal5_tab.hex)
-SS, SP, YLC, YEQ = 0x03C0, 0x0270, 0x0180, 0x0185
+SS, SP, YEQ, YLC = 0x03C0, 0x0270, 0x0180, 0x0185   # Y: EQ then LC, copied from X:SP+5..+14 every frame
 (S_GENV, S_GG, S_DLP, S_DENV, S_DG, S_G, S_CENV) = range(8, 15)     # after LC (0-3) and EQ (4-7) biquad states
 WS, WP = 0x03D0, 0x02B0
 (W_ENV, W_G) = range(2)
@@ -36,9 +36,9 @@ a.label('vocal5_init')
 h.clr('A'); h.li('R0', SS); h.rep(S_CENV + 1); h.stxi('A', '(R0)+')
 h.stl('A', WS + W_ENV); h.stl('A', WS + W_G)
 h.li('A', 0x7FFFFF); h.stl('A', SS + S_DG); h.stl('A', SS + S_G)
-h.li('R4', YLC); h.li('R1', LCTAB)                 # low-cut coefficients: SRAM table -> Y
-a.do(5, 'i_lc'); h.ldxi('(R1)+', 'X0'); h.styi('X0', '(R4)+'); a.label('i_lc')
-for k, v in enumerate(sm.strip_params()):
+h.li('R4', SP + 10); h.li('R1', LCTAB)             # low-cut coefficients (100 Hz HP): SRAM table -> X:SP+10..+14
+a.do(5, 'i_lc'); h.ldxi('(R1)+', 'X0'); h.stxi('X0', '(R4)+'); a.label('i_lc')
+for k, v in enumerate(sm.strip_params()[:10]):
     h.li('A', v & 0xFFFFFF); h.stl('A', SP + k)
 for k, v in enumerate(sm.swell_params()):
     h.li('A', v); h.stl('A', WP + k)
@@ -47,7 +47,7 @@ h.rts()
 # ============================================================ fx_strip (X1 in -> X1 out)
 a.label('fx_strip')
 h.li('R3', SS); h.li('R5', SP); h.li('R4', YEQ); h.li('R1', SP + 5)
-a.do(5, 's_eqc'); h.ldxi('(R1)+', 'X0'); h.styi('X0', '(R4)+'); a.label('s_eqc')   # EQ coefficients -> Y
+a.do(10, 's_eqc'); h.ldxi('(R1)+', 'X0'); h.styi('X0', '(R4)+'); a.label('s_eqc')  # EQ + LC coefficients -> Y
 h.mv('X1', 'X0'); h.li('R0', SS); h.li('R4', YLC)
 a.jsr('bq')                                                              # low cut (R0/R4 then point at the EQ)
 h.mv('X0', 'A'); h.abs_('A'); h.xr('Y1', S_GENV); h.mpyi(sm.ENV_DEC, 'Y1', 'B')   # gate envelope
@@ -85,6 +85,7 @@ h.mpyi(q(vm.ATT), 'Y1', 'B')
 a.label('s_cs')
 h.xw('B', S_G)
 h.xr('Y0', 3, R=5); h.mpy('X1', 'Y0', 'A'); h.asl(2, 'A'); h.mv('A', 'X0')         # makeup
+h.li('R4', YEQ)
 a.jsr('bq')                                                              # EQ
 h.xr('A', 4, R=5); h.tst('A'); j('EQ', 's_nd')                                       # drive
 h.mv('A', 'Y0'); h.mpy('X0', 'Y0', 'A'); h.asl(4, 'A'); h.mv('A', 'X0')
