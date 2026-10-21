@@ -44,7 +44,23 @@ power the M-One on normally, then `python dsp/revdelay.py` and `python tools/mon
   `dsp/codec_on.py` (run by `boot`) writes the AK4524's run values and drives MUTE* (PB12) **low**. Despite its name,
   that pin mutes when high or open (schematic page 9, "open=mute"); TC itself runs with it low.
 
-## Effects
+## Where things stand
+`main` holds what has been checked on the hardware. Newer work lives on the
+[`untested`](https://github.com/yuyoi/M-one-rack-screen-and-os-mod-/tree/untested) branch and locally until it has been
+heard or seen on the unit. Status words used below: **hardware** = heard/seen on the unit, **muted hw** = ran on the
+unit with the outputs muted (memory and timing checked, not heard), **sim** = bit-exact in the simulator only.
+
+| Area | What | Status |
+|---|---|---|
+| Vocal FX | 17 effects (heavy, reverse, comp, TUNE autotune, radio, formant, octave, harmony, doubler, reverb, delay, shimmer, swell, grain...) + a STRIP input stage | muted hw |
+| Presets | 58 vocal presets incl. the DARK KNIGHT / KNIGHT HELM helmet voices (new HELM cavity effect) | muted hw (HELM: sim) |
+| AMP | modelled amp (TMB stack, presence, sag), pots as LEVEL / GAIN / TONE | muted hw, ESP math verified |
+| PEDAL board | 31 guitar-pedal sims with their real knobs, input gate, MASTER | hardware (TS-808 heard) |
+| SYNTH | own DSP program: 8+ voices, 5 waves, filter, envelopes, ARP, MIDI in/out | sim, MIDI not wired yet |
+| Swapping | the ring loads FX or SYNTH by itself from the ESP's flash (no PC), PS2-style loading screen | flashed, first audible run pending |
+| Safety | DSP crash guard (restarts silent, the panel puts your settings back), codec reset at every boot | muted hw (10 round trips, no power cycle) |
+
+## Effects (the first ones)
 | Script | What | Status |
 |---|---|---|
 | `dsp/passthrough.py` | ADC -> DAC, nothing else | **hardware** (heard) |
@@ -88,6 +104,17 @@ SETTINGS > THEME sets the menu colours: MATCH SCENE, or any of 14 fixed themes.
 
 ![The 14 menu themes on the SETTINGS page](docs/screen/themes.png)
 
+**Preset screens:** every preset gets its own animated screen: a moving background and a spinning low-poly 3D icon.
+T6 / B6 on the PRESET page pick any other screen for that preset (by category: metal / haunted, ambient, holy, retro,
+stage, creatures), or the plain page. The icons live in the ESP's data partition, so they cost no firmware space.
+Designed in `tools/scenes/` (same maths as the firmware), exported with `tools/scenes/export.py`.
+
+![All 58 preset screens](docs/screen/preset_screens.png)
+
+Swapping between the effects program and the synth runs from the ring, with a PS2-style loading screen:
+
+![Loading screen](docs/screen/loading.png)
+
 ## Files
 | Path | What |
 |---|---|
@@ -96,7 +123,9 @@ SETTINGS > THEME sets the menu colours: MATCH SCENE, or any of 14 fixed themes.
 | `tools/dis56k.py` | table-driven DSP56300 disassembler |
 | `tools/fetch_opcodes.py` | downloads the GPL opcode table and builds `opcodes56300.json` locally (not committed) |
 | `tools/build_app.py` | rebuilds and disassembles the stock app from your own flash dump -> `dumps/app.lst` (not committed) |
-| `dsp/*.py` | the effects |
+| `dsp/*.py` | the effects, the kernel (`os.py`), the synth, `presets.py` |
+| `tools/pack_data.py` | packs the DSP programs + preset-screen icons for the ESP's data partition (`mone.py data` uploads it) |
+| `tools/scenes/` | the preset screens: models, backgrounds, mockup renderer, export |
 | `FLASH_MAP.md` | flash format, loader, memory map, peripheral init values, audio path |
 | `FRONT_PROTOCOL.md` | how the stock DSP talks to the front panel AVR over J5 |
 | `how-to-reverse-engineer/` | the briefing for continuing the work |
@@ -108,12 +137,16 @@ the read instruction for every byte (see `how-to-reverse-engineer/PITFALLS.md` f
 loader section ends exactly where the next one starts (`tools/build_app.py` shows the blocks).
 
 ## TODO
-- Standalone boot: our own PLL/AAR/ESAI/codec init so TC's firmware never has to run (then the front panel can go).
+- **Hear it all:** the first audible run of the self-loading FX / SYNTH swap, the synth, the helmet voices, the presets.
+- **Use the whole 16 MB:** the build still uses Arduino's default 4 MB layout (firmware at 99%). A 16 MB partition
+  table (`firmware/partitions_16mb.csv`) needs one USB flash, then OTA works as before.
+- **MIDI:** wire J5-3 (MIDI in) -> GPIO 3 and J5-2 (MIDI out) -> GPIO 46. The firmware side is done.
+- **Boot without a PC:** load the FX program by itself at power-on (it already loads by itself on a ring swap).
+- **Standalone boot:** our own PLL/AAR/ESAI/codec init so TC's firmware never has to run (then the front panel can go).
   With the front panel removed, J5 pin 16 (DSP_RESET) must be held high.
-- Programs stored on the ESP and auto-loaded when the power button turns the DSP on (today `mone.py boot` from a PC).
-- Pots mapped to effect parameters.
-- More effects: latency test.
-- Chain effects (heavy -> reverse) in one program; two-head reverse for a constant-level wash.
+- More pedals (the GP-16 extras), amp voicings, synth samples once the 16 MB layout is in.
+- Menu rework: quick-select pages and submenus.
+- Two-head reverse for a constant-level wash; latency test.
 
 ## Credits and legal
 By **JunkSmithWizard (JSW)** with Claude (Anthropic). The DSP opcode table is fetched at build time from the
