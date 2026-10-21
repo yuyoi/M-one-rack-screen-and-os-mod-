@@ -5,6 +5,8 @@ it talks to the M-One's **Motorola DSP56362** through the DSP's own debug port (
 straight into the DSP's RAM, and drives a colour screen. The TC front panel and its dead segment LCD are no longer
 needed for the new effects.
 
+**Discord:** come hang out, ask questions and share builds: https://discord.gg/R3CQkFdRtf
+
 What runs today: our own DSP code on the M-One. A passthrough, a simple distortion, a **heavy distortion** (tighten,
 three gain stages, soft clip, cab-ish filter) and a **reverse delay** with feedback, tempo-synced chunks and a
 triangle swell. Every effect is a small Python script that writes DSP machine code. A change is a 10-second reload,
